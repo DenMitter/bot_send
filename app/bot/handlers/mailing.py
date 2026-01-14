@@ -1,0 +1,919 @@
+import os
+from uuid import uuid4
+
+from aiogram import F, Router
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import CallbackQuery, FSInputFile, Message
+from sqlalchemy import func, select
+
+from app.bot.handlers.common import is_admin, resolve_locale
+from app.bot.keyboards import (
+    account_select_keyboard,
+    back_to_menu_keyboard,
+    chats_scope_keyboard,
+    chats_select_keyboard,
+    mailing_mention_keyboard,
+    mailing_actions_keyboard,
+    mailing_details_keyboard,
+    mailing_list_keyboard,
+    mailing_recipients_keyboard,
+    mailing_source_keyboard,
+    step_back_keyboard,
+    user_menu_keyboard,
+)
+from app.core.config import get_settings
+from app.db.models import Mailing, MailingRecipient, MessageType, ParsedChat, TargetSource
+from app.db.session import get_session_factory
+from app.i18n.translator import t
+from app.services.auth import AccountService
+from app.services.mailing.service import MailingService
+
+
+router = Router()
+
+RECIPIENTS_PAGE_SIZE = 10
+
+
+class MailingStates(StatesGroup):
+    account = State()
+    source = State()
+    chats_scope = State()
+    chat_select = State()
+    mention = State()
+    delay = State()
+    limit = State()
+    content = State()
+
+
+class MailingControlStates(StatesGroup):
+    id_action = State()
+
+
+class MailingEditStates(StatesGroup):
+    content = State()
+
+
+async def _prompt(message: Message, state: FSMContext, text: str, reply_markup=None) -> None:
+    sent = await message.answer(text, reply_markup=reply_markup)
+    await state.update_data(prompt_id=sent.message_id)
+
+
+async def _edit_prompt(message: Message, state: FSMContext, text: str, reply_markup=None) -> None:
+    data = await state.get_data()
+    prompt_id = data.get("prompt_id")
+    if prompt_id:
+        try:
+            await message.bot.edit_message_text(
+                text,
+                chat_id=message.chat.id,
+                message_id=prompt_id,
+                reply_markup=reply_markup,
+            )
+            return
+        except Exception:
+            pass
+    await _prompt(message, state, text, reply_markup)
+
+
+async def _list_accounts(user_id: int):
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        accounts = await AccountService(session).list_accounts(user_id)
+    return accounts
+
+
+async def _extract_mailing_content(message: Message):
+    settings = get_settings()
+    media_path = None
+    media_file_id = None
+    sticker_set_name = None
+    sticker_set_index = None
+    sticker_pack_missing = False
+    message_type = MessageType.text
+    text = message.text or message.caption or ""
+
+    os.makedirs(settings.media_dir, exist_ok=True)
+
+    if message.photo:
+        message_type = MessageType.photo
+        file = await message.bot.get_file(message.photo[-1].file_id)
+        media_path = os.path.join(settings.media_dir, f"{uuid4().hex}.jpg")
+        await message.bot.download_file(file.file_path, media_path)
+    elif message.video:
+        message_type = MessageType.video
+        file = await message.bot.get_file(message.video.file_id)
+        media_path = os.path.join(settings.media_dir, f"{uuid4().hex}.mp4")
+        await message.bot.download_file(file.file_path, media_path)
+    elif message.voice:
+        message_type = MessageType.voice
+        file = await message.bot.get_file(message.voice.file_id)
+        media_path = os.path.join(settings.media_dir, f"{uuid4().hex}.ogg")
+        await message.bot.download_file(file.file_path, media_path)
+    elif message.audio:
+        message_type = MessageType.audio
+        file = await message.bot.get_file(message.audio.file_id)
+        ext = os.path.splitext(message.audio.file_name or "")[1] or ".mp3"
+        media_path = os.path.join(settings.media_dir, f"{uuid4().hex}{ext}")
+        await message.bot.download_file(file.file_path, media_path)
+    elif message.sticker:
+        message_type = MessageType.sticker
+        media_file_id = message.sticker.file_id
+        sticker_set_name = message.sticker.set_name
+        if sticker_set_name:
+            try:
+                sticker_set = await message.bot.get_sticker_set(sticker_set_name)
+                for idx, sticker in enumerate(sticker_set.stickers):
+                    if sticker.file_id == media_file_id:
+                        sticker_set_index = idx
+                        break
+            except Exception:
+                sticker_set_name = None
+                sticker_set_index = None
+        if not sticker_set_name:
+            sticker_pack_missing = True
+            file = await message.bot.get_file(message.sticker.file_id)
+            ext = os.path.splitext(file.file_path or "")[1].lower() or ".webp"
+            media_path = os.path.join(settings.media_dir, f"{uuid4().hex}{ext}")
+            await message.bot.download_file(file.file_path, media_path)
+    elif message.document:
+        message_type = MessageType.document
+        file = await message.bot.get_file(message.document.file_id)
+        media_path = os.path.join(settings.media_dir, f"{uuid4().hex}_{message.document.file_name}")
+        await message.bot.download_file(file.file_path, media_path)
+
+    if media_path:
+        media_path = os.path.abspath(media_path)
+    return (
+        message_type,
+        text,
+        media_path,
+        media_file_id,
+        sticker_set_name,
+        sticker_set_index,
+        sticker_pack_missing,
+    )
+
+
+@router.message(Command("mailing_new"))
+async def mailing_new(message: Message, state: FSMContext) -> None:
+    locale = await resolve_locale(message.from_user.id, message.from_user.language_code)
+    await state.clear()
+    accounts = await _list_accounts(message.from_user.id)
+    if not accounts:
+        await message.answer(t("no_account", locale))
+        return
+    await _prompt(message, state, t("mailing_account", locale), reply_markup=account_select_keyboard(accounts, locale))
+    await state.set_state(MailingStates.account)
+
+
+@router.callback_query(F.data.startswith("mailing:account:"))
+async def mailing_account_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    account_value = callback.data.split(":")[-1]
+    account_id = None
+    if account_value != "active":
+        try:
+            account_id = int(account_value)
+        except ValueError:
+            await callback.answer()
+            return
+    await state.update_data(account_id=account_id)
+    await callback.message.edit_text(t("mailing_source", locale), reply_markup=mailing_source_keyboard(locale))
+    await state.set_state(MailingStates.source)
+    await state.update_data(prompt_id=callback.message.message_id)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "mailing:back:menu")
+async def mailing_back_menu_cb(callback: CallbackQuery) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    await callback.message.edit_text(
+        t("start", locale),
+        reply_markup=user_menu_keyboard(locale, is_admin(callback.message)),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.in_(["mailing:source:subscribers", "mailing:source:parsed", "mailing:source:chats"]))
+async def mailing_source_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    value = callback.data.split(":")[-1]
+    await state.update_data(source=value)
+    if value == "chats":
+        await callback.message.edit_text(t("mailing_chats_scope", locale), reply_markup=chats_scope_keyboard(locale))
+        await state.set_state(MailingStates.chats_scope)
+    else:
+        await callback.message.edit_text(t("mailing_mention", locale), reply_markup=mailing_mention_keyboard(locale))
+        await state.set_state(MailingStates.mention)
+    await state.update_data(prompt_id=callback.message.message_id)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "mailing:back:account")
+async def mailing_back_account_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    accounts = await _list_accounts(callback.from_user.id)
+    if not accounts:
+        await callback.message.edit_text(t("no_account", locale), reply_markup=back_to_menu_keyboard(locale))
+        await callback.answer()
+        return
+    await callback.message.edit_text(
+        t("mailing_account", locale),
+        reply_markup=account_select_keyboard(accounts, locale),
+    )
+    await state.set_state(MailingStates.account)
+    await callback.answer()
+
+
+@router.callback_query(F.data.in_(["mailing:chats:all", "mailing:chats:select", "mailing:chats:back"]))
+async def mailing_chats_scope_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    action = callback.data.split(":")[-1]
+    if action == "back":
+        await callback.message.edit_text(t("mailing_chats_scope", locale), reply_markup=chats_scope_keyboard(locale))
+        await state.set_state(MailingStates.chats_scope)
+        await callback.answer()
+        return
+    if action == "all":
+        await state.update_data(chat_id=None)
+        await callback.message.edit_text(t("mailing_mention", locale), reply_markup=mailing_mention_keyboard(locale))
+        await state.set_state(MailingStates.mention)
+        await callback.answer()
+        return
+
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        result = await session.execute(
+            select(ParsedChat).where(ParsedChat.owner_id == callback.from_user.id).limit(20)
+        )
+        chats = result.scalars().all()
+    if not chats:
+        await callback.message.edit_text(t("mailing_chats_scope", locale), reply_markup=chats_scope_keyboard(locale))
+        await state.set_state(MailingStates.chats_scope)
+        await callback.answer()
+        return
+    await state.update_data(selected_chat_ids=[])
+    await callback.message.edit_text(
+        f"{t('mailing_choose_chat', locale)}\n{t('mailing_choose_chat_hint', locale)}",
+        reply_markup=chats_select_keyboard(chats, [], locale),
+    )
+    await state.set_state(MailingStates.chat_select)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mailing:chat:"))
+async def mailing_chat_select_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    try:
+        chat_id = int(callback.data.split(":")[-1])
+    except ValueError:
+        await callback.answer()
+        return
+    data = await state.get_data()
+    selected = set(data.get("selected_chat_ids") or [])
+    if chat_id in selected:
+        selected.remove(chat_id)
+    else:
+        selected.add(chat_id)
+    await state.update_data(selected_chat_ids=list(selected))
+
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        result = await session.execute(
+            select(ParsedChat).where(ParsedChat.owner_id == callback.from_user.id).limit(20)
+        )
+        chats = result.scalars().all()
+    await callback.message.edit_text(
+        f"{t('mailing_choose_chat', locale)}\n{t('mailing_choose_chat_hint', locale)}",
+        reply_markup=chats_select_keyboard(chats, list(selected), locale),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "mailing:chats:done")
+async def mailing_chats_done_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    data = await state.get_data()
+    selected = data.get("selected_chat_ids") or []
+    if not selected:
+        session_factory = get_session_factory()
+        async with session_factory() as session:
+            result = await session.execute(
+                select(ParsedChat).where(ParsedChat.owner_id == callback.from_user.id).limit(20)
+            )
+            chats = result.scalars().all()
+        await callback.message.edit_text(
+            f"{t('mailing_choose_chat', locale)}\n{t('mailing_need_chat', locale)}",
+            reply_markup=chats_select_keyboard(chats, [], locale),
+        )
+        await callback.answer()
+        return
+    await state.update_data(chat_ids=selected)
+    await callback.message.edit_text(t("mailing_mention", locale), reply_markup=mailing_mention_keyboard(locale))
+    await state.set_state(MailingStates.mention)
+    await callback.answer()
+
+
+@router.callback_query(F.data.in_(["mailing:mention:yes", "mailing:mention:no"]))
+async def mailing_mention_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    value = callback.data.split(":")[-1]
+    await state.update_data(mention=value == "yes")
+    await callback.message.edit_text(t("mailing_delay", locale))
+    await state.set_state(MailingStates.delay)
+    await state.update_data(prompt_id=callback.message.message_id)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "mailing:back:source")
+async def mailing_back_source_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    await callback.message.edit_text(t("mailing_source", locale), reply_markup=mailing_source_keyboard(locale))
+    await state.set_state(MailingStates.source)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "mailing:back:mention")
+async def mailing_back_mention_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    await callback.message.edit_text(t("mailing_mention", locale), reply_markup=mailing_mention_keyboard(locale))
+    await state.set_state(MailingStates.mention)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "mailing:back:delay")
+async def mailing_back_delay_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    await callback.message.edit_text(t("mailing_delay", locale), reply_markup=step_back_keyboard(locale, "mailing:back:mention"))
+    await state.set_state(MailingStates.delay)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "mailing:back:limit")
+async def mailing_back_limit_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    await callback.message.edit_text(t("mailing_limit", locale), reply_markup=step_back_keyboard(locale, "mailing:back:delay"))
+    await state.set_state(MailingStates.limit)
+    await callback.answer()
+
+
+@router.message(MailingStates.delay)
+async def mailing_delay(message: Message, state: FSMContext) -> None:
+    locale = await resolve_locale(message.from_user.id, message.from_user.language_code)
+    try:
+        delay = float((message.text or "").strip())
+    except ValueError:
+        await _edit_prompt(message, state, t("mailing_delay", locale), reply_markup=step_back_keyboard(locale, "mailing:back:mention"))
+        return
+    await state.update_data(delay=delay)
+    await _edit_prompt(message, state, t("mailing_limit", locale), reply_markup=step_back_keyboard(locale, "mailing:back:delay"))
+    await state.set_state(MailingStates.limit)
+
+
+@router.message(MailingStates.limit)
+async def mailing_limit(message: Message, state: FSMContext) -> None:
+    locale = await resolve_locale(message.from_user.id, message.from_user.language_code)
+    try:
+        limit = int((message.text or "").strip())
+    except ValueError:
+        await _edit_prompt(message, state, t("mailing_limit", locale), reply_markup=step_back_keyboard(locale, "mailing:back:delay"))
+        return
+    await state.update_data(limit=limit)
+    await _edit_prompt(message, state, t("mailing_content", locale), reply_markup=step_back_keyboard(locale, "mailing:back:limit"))
+    await state.set_state(MailingStates.content)
+
+
+@router.message(MailingStates.content)
+async def mailing_content(message: Message, state: FSMContext) -> None:
+    locale = await resolve_locale(message.from_user.id, message.from_user.language_code)
+    (
+        message_type,
+        text,
+        media_path,
+        media_file_id,
+        sticker_set_name,
+        sticker_set_index,
+        sticker_pack_missing,
+    ) = await _extract_mailing_content(message)
+
+    data = await state.get_data()
+    source_value = data.get("source")
+    if source_value == "subscribers":
+        source = TargetSource.subscribers
+    elif source_value == "chats":
+        source = TargetSource.chats
+    else:
+        source = TargetSource.parsed
+    mention = bool(data.get("mention"))
+    delay = float(data.get("delay"))
+    limit = int(data.get("limit"))
+    account_id = data.get("account_id")
+    chat_id = data.get("chat_id")
+    chat_ids = data.get("chat_ids")
+
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        if account_id is None:
+            account = await AccountService(session).get_active_account(message.from_user.id)
+        else:
+            accounts = await AccountService(session).list_accounts(message.from_user.id)
+            account = next((acc for acc in accounts if acc.id == account_id), None)
+        if not account:
+            await message.answer(t("no_account", locale))
+            await state.clear()
+            return
+        mailing = await MailingService(session).create_mailing(
+            owner_id=message.from_user.id,
+            account_id=account.id,
+            chat_id=chat_id,
+            target_ids=chat_ids,
+            target_source=source,
+            message_type=message_type,
+            text=text,
+            media_path=media_path,
+            media_file_id=media_file_id,
+            sticker_set_name=sticker_set_name,
+            sticker_set_index=sticker_set_index,
+            mention=mention,
+            delay_seconds=delay,
+            limit_count=limit,
+        )
+
+    await message.answer(t("mailing_created", locale).format(id=mailing.id))
+    await state.clear()
+
+
+@router.callback_query(F.data.startswith("mailing:edit:"))
+async def mailing_edit_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    try:
+        mailing_id = int(callback.data.split(":")[-1])
+    except ValueError:
+        await callback.answer()
+        return
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        mailing = await MailingService(session).get_mailing(callback.from_user.id, mailing_id)
+    if not mailing:
+        await callback.message.edit_text(t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
+        await callback.answer()
+        return
+    await state.update_data(mailing_id=mailing_id)
+    await callback.message.edit_text(
+        t("mailing_edit_content", locale),
+        reply_markup=step_back_keyboard(locale, f"mailing:select:{mailing_id}"),
+    )
+    await state.set_state(MailingEditStates.content)
+    await callback.answer()
+
+
+@router.message(MailingEditStates.content)
+async def mailing_edit_content(message: Message, state: FSMContext) -> None:
+    locale = await resolve_locale(message.from_user.id, message.from_user.language_code)
+    data = await state.get_data()
+    mailing_id = data.get("mailing_id")
+    if not mailing_id:
+        await message.answer(t("mailing_not_found", locale))
+        await state.clear()
+        return
+    (
+        message_type,
+        text,
+        media_path,
+        media_file_id,
+        sticker_set_name,
+        sticker_set_index,
+        sticker_pack_missing,
+    ) = await _extract_mailing_content(message)
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        service = MailingService(session)
+        mailing = await service.get_mailing(message.from_user.id, mailing_id)
+        if not mailing:
+            await message.answer(t("mailing_not_found", locale))
+            await state.clear()
+            return
+        old_media_path = mailing.media_path
+        updated = await service.update_content(
+            message.from_user.id,
+            mailing_id,
+            message_type=message_type,
+            text=text,
+            media_path=media_path,
+            media_file_id=media_file_id,
+            sticker_set_name=sticker_set_name,
+            sticker_set_index=sticker_set_index,
+        )
+    if old_media_path and old_media_path != media_path and os.path.isfile(old_media_path):
+        try:
+            os.remove(old_media_path)
+        except OSError:
+            pass
+    if not updated:
+        await message.answer(t("mailing_not_found", locale))
+        await state.clear()
+        return
+    await message.answer(t("mailing_updated", locale).format(id=mailing_id))
+    await state.clear()
+
+
+@router.message(Command("mailing_pause"))
+async def mailing_pause(message: Message) -> None:
+    locale = await resolve_locale(message.from_user.id, message.from_user.language_code)
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        return
+    mailing_id = int(parts[1].strip())
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        ok = await MailingService(session).pause(message.from_user.id, mailing_id)
+    await message.answer(t("mailing_paused", locale) if ok else t("mailing_not_found", locale))
+
+
+@router.message(Command("mailing_resume"))
+async def mailing_resume(message: Message) -> None:
+    locale = await resolve_locale(message.from_user.id, message.from_user.language_code)
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        return
+    mailing_id = int(parts[1].strip())
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        ok = await MailingService(session).resume(message.from_user.id, mailing_id)
+    await message.answer(t("mailing_resumed", locale) if ok else t("mailing_not_found", locale))
+
+
+@router.message(Command("mailing_status"))
+async def mailing_status(message: Message) -> None:
+    locale = await resolve_locale(message.from_user.id, message.from_user.language_code)
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        return
+    mailing_id = int(parts[1].strip())
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        status = await MailingService(session).get_status(message.from_user.id, mailing_id)
+    if status:
+        await message.answer(t("mailing_status", locale).format(status=status.value))
+    else:
+        await message.answer(t("mailing_not_found", locale))
+
+
+@router.message(MailingControlStates.id_action)
+async def mailing_id_action(message: Message, state: FSMContext) -> None:
+    locale = await resolve_locale(message.from_user.id, message.from_user.language_code)
+    try:
+        mailing_id = int((message.text or "").strip())
+    except ValueError:
+        await message.answer(t("enter_id", locale))
+        return
+    data = await state.get_data()
+    action = data.get("action")
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        service = MailingService(session)
+        if action == "pause":
+            ok = await service.pause(message.from_user.id, mailing_id)
+            await message.answer(t("mailing_paused", locale) if ok else t("mailing_not_found", locale))
+        elif action == "resume":
+            ok = await service.resume(message.from_user.id, mailing_id)
+            await message.answer(t("mailing_resumed", locale) if ok else t("mailing_not_found", locale))
+        elif action == "status":
+            status = await service.get_status(message.from_user.id, mailing_id)
+            if status:
+                await message.answer(t("mailing_status", locale).format(status=status.value))
+            else:
+                await message.answer(t("mailing_not_found", locale))
+    await state.clear()
+
+
+@router.callback_query(F.data == "mailing:new")
+async def mailing_new_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    await state.clear()
+    accounts = await _list_accounts(callback.from_user.id)
+    if not accounts:
+        await callback.message.edit_text(t("no_account", locale), reply_markup=back_to_menu_keyboard(locale))
+        await callback.answer()
+        return
+    await callback.message.edit_text(
+        t("mailing_account", locale),
+        reply_markup=account_select_keyboard(accounts, locale),
+    )
+    await state.set_state(MailingStates.account)
+    await state.update_data(prompt_id=callback.message.message_id)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "mailing:list")
+async def mailing_list_cb(callback: CallbackQuery) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        result = await session.execute(select(Mailing).where(Mailing.owner_id == callback.from_user.id))
+        mailings = result.scalars().all()
+    if not mailings:
+        await callback.message.edit_text(t("mailing_none", locale), reply_markup=back_to_menu_keyboard(locale))
+        await callback.answer()
+        return
+    await callback.message.edit_text(
+        t("mailing_choose", locale),
+        reply_markup=mailing_list_keyboard(mailings, locale),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mailing:select:"))
+async def mailing_select_cb(callback: CallbackQuery) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    try:
+        mailing_id = int(callback.data.split(":")[-1])
+    except ValueError:
+        await callback.answer()
+        return
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        result = await session.execute(
+            select(Mailing).where(Mailing.owner_id == callback.from_user.id, Mailing.id == mailing_id)
+        )
+        mailing = result.scalars().first()
+    if not mailing:
+        await callback.message.edit_text(t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
+        await callback.answer()
+        return
+    await callback.message.edit_text(
+        t("mailing_actions", locale).format(id=mailing.id),
+        reply_markup=mailing_actions_keyboard(mailing.id, mailing.status.value, locale),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mailing:pause:"))
+async def mailing_pause_action_cb(callback: CallbackQuery) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    try:
+        mailing_id = int(callback.data.split(":")[-1])
+    except ValueError:
+        await callback.answer()
+        return
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        ok = await MailingService(session).pause(callback.from_user.id, mailing_id)
+        result = await session.execute(
+            select(Mailing).where(Mailing.owner_id == callback.from_user.id, Mailing.id == mailing_id)
+        )
+        mailing = result.scalars().first()
+    if not ok or not mailing:
+        await callback.message.edit_text(t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
+        await callback.answer()
+        return
+    await callback.message.edit_text(
+        t("mailing_actions", locale).format(id=mailing.id),
+        reply_markup=mailing_actions_keyboard(mailing.id, mailing.status.value, locale),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mailing:resume:"))
+async def mailing_resume_action_cb(callback: CallbackQuery) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    try:
+        mailing_id = int(callback.data.split(":")[-1])
+    except ValueError:
+        await callback.answer()
+        return
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        ok = await MailingService(session).resume(callback.from_user.id, mailing_id)
+        result = await session.execute(
+            select(Mailing).where(Mailing.owner_id == callback.from_user.id, Mailing.id == mailing_id)
+        )
+        mailing = result.scalars().first()
+    if not ok or not mailing:
+        await callback.message.edit_text(t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
+        await callback.answer()
+        return
+    await callback.message.edit_text(
+        t("mailing_actions", locale).format(id=mailing.id),
+        reply_markup=mailing_actions_keyboard(mailing.id, mailing.status.value, locale),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.regexp(r"^mailing:details:\d+$"))
+async def mailing_details_cb(callback: CallbackQuery) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    try:
+        mailing_id = int(callback.data.split(":")[-1])
+    except ValueError:
+        await callback.answer()
+        return
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        service = MailingService(session)
+        mailing = await service.get_mailing(callback.from_user.id, mailing_id)
+        if not mailing:
+            await callback.message.edit_text(t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
+            await callback.answer()
+            return
+        stats = await service.get_stats(callback.from_user.id, mailing_id)
+    source = mailing.target_source.value
+    mention = "yes" if mailing.mention else "no"
+    try:
+        await callback.message.edit_text(
+            t("mailing_details", locale).format(
+                id=mailing.id,
+                status=mailing.status.value,
+                source=source,
+                message_type=mailing.message_type.value,
+                mention=mention,
+                delay=mailing.delay_seconds,
+                limit=mailing.limit_count,
+                total=stats["total"],
+                sent=stats["sent"],
+                failed=stats["failed"],
+                pending=stats["pending"],
+            ),
+            parse_mode="HTML",
+            reply_markup=mailing_details_keyboard(mailing.id, mailing.target_source.value, locale),
+        )
+    except TelegramBadRequest as exc:
+        if "message is not modified" not in str(exc):
+            raise
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mailing:details:recipients:"))
+async def mailing_details_recipients_cb(callback: CallbackQuery) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    parts = callback.data.split(":")
+    if len(parts) < 5:
+        await callback.answer()
+        return
+    try:
+        mailing_id = int(parts[3])
+        page = int(parts[4])
+    except ValueError:
+        await callback.answer()
+        return
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        service = MailingService(session)
+        mailing = await service.get_mailing(callback.from_user.id, mailing_id)
+        if not mailing:
+            await callback.message.edit_text(t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
+            await callback.answer()
+            return
+        result = await session.execute(
+            select(func.count(MailingRecipient.id)).where(MailingRecipient.mailing_id == mailing_id)
+        )
+        total = int(result.scalar() or 0)
+        total_pages = max((total + RECIPIENTS_PAGE_SIZE - 1) // RECIPIENTS_PAGE_SIZE, 1)
+        page = max(1, min(page, total_pages))
+        offset = (page - 1) * RECIPIENTS_PAGE_SIZE
+        result = await session.execute(
+            select(MailingRecipient)
+            .where(MailingRecipient.mailing_id == mailing_id)
+            .order_by(MailingRecipient.id)
+            .offset(offset)
+            .limit(RECIPIENTS_PAGE_SIZE)
+        )
+        recipients = result.scalars().all()
+
+        chat_map = {}
+        if mailing.target_source == TargetSource.chats and recipients:
+            chat_ids = [rec.user_id for rec in recipients]
+            result = await session.execute(
+                select(ParsedChat).where(
+                    ParsedChat.owner_id == callback.from_user.id,
+                    ParsedChat.chat_id.in_(chat_ids),
+                )
+            )
+            chats = result.scalars().all()
+            chat_map = {chat.chat_id: chat for chat in chats}
+
+    if total == 0:
+        text = t("mailing_recipients_empty", locale)
+    else:
+        header = t("mailing_recipients_title", locale).format(page=page, pages=total_pages, total=total)
+        lines = []
+        start_index = offset + 1
+        for idx, rec in enumerate(recipients):
+            label = None
+            if mailing.target_source == TargetSource.chats:
+                chat = chat_map.get(rec.user_id)
+                if chat:
+                    label = chat.title or (f"@{chat.username}" if chat.username else None)
+            if not label:
+                label = f"@{rec.username}" if rec.username else str(rec.user_id)
+            lines.append(f"{start_index + idx}. {label}")
+        text = f"{header}\n" + "\n".join(lines)
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=mailing_recipients_keyboard(mailing_id, page, total_pages, locale),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mailing:details:message:"))
+async def mailing_details_message_cb(callback: CallbackQuery) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    try:
+        mailing_id = int(callback.data.split(":")[-1])
+    except ValueError:
+        await callback.answer()
+        return
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        service = MailingService(session)
+        mailing = await service.get_mailing(callback.from_user.id, mailing_id)
+    if not mailing:
+        await callback.message.edit_text(t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
+        await callback.answer()
+        return
+    if not mailing.text and not mailing.media_path:
+        await callback.message.answer(t("mailing_message_empty", locale))
+        await callback.answer()
+        return
+
+    info_text = t("mailing_message_info", locale).format(id=mailing.id, message_type=mailing.message_type.value)
+
+    text = mailing.text or ""
+    if text and len(text) <= 3500:
+        await callback.message.answer(f"{info_text}\n\n{text}" if info_text else text)
+    elif text:
+        settings = get_settings()
+        os.makedirs(settings.media_dir, exist_ok=True)
+        filename = f"mailing_{mailing.id}_message_{uuid4().hex}.txt"
+        filepath = os.path.join(settings.media_dir, filename)
+        try:
+            with open(filepath, "w", encoding="utf-8") as handle:
+                handle.write(text)
+            if len(info_text) <= 1000:
+                await callback.message.answer(info_text)
+            await callback.message.answer_document(FSInputFile(filepath))
+        finally:
+            if os.path.exists(filepath):
+                os.remove(filepath)
+    else:
+        await callback.message.answer(info_text)
+
+    if mailing.media_path and os.path.isfile(mailing.media_path):
+        await callback.message.answer_document(FSInputFile(mailing.media_path))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mailing:repeat:"))
+async def mailing_repeat_cb(callback: CallbackQuery) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    try:
+        mailing_id = int(callback.data.split(":")[-1])
+    except ValueError:
+        await callback.answer()
+        return
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        service = MailingService(session)
+        clone = await service.repeat(callback.from_user.id, mailing_id)
+    if not clone:
+        await callback.message.edit_text(t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
+        await callback.answer()
+        return
+    await callback.message.edit_text(
+        t("mailing_repeated", locale).format(id=clone.id),
+        reply_markup=mailing_actions_keyboard(clone.id, clone.status.value, locale),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mailing:delete:"))
+async def mailing_delete_cb(callback: CallbackQuery) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    try:
+        mailing_id = int(callback.data.split(":")[-1])
+    except ValueError:
+        await callback.answer()
+        return
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        service = MailingService(session)
+        ok = await service.delete(callback.from_user.id, mailing_id)
+        result = await session.execute(select(Mailing).where(Mailing.owner_id == callback.from_user.id))
+        mailings = result.scalars().all()
+    if not ok:
+        await callback.message.edit_text(t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
+        await callback.answer()
+        return
+    if not mailings:
+        await callback.message.edit_text(t("mailing_none", locale), reply_markup=back_to_menu_keyboard(locale))
+        await callback.answer()
+        return
+    await callback.message.edit_text(
+        t("mailing_choose", locale),
+        reply_markup=mailing_list_keyboard(mailings, locale),
+    )
+    await callback.answer()
