@@ -7,6 +7,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 import qrcode
 
+from app.bot.history import edit_with_history
 from app.bot.handlers.common import is_admin, resolve_locale
 from app.bot.keyboards import (
     account_actions_keyboard,
@@ -49,7 +50,7 @@ async def account_add(message: Message, state: FSMContext) -> None:
 async def account_add_cb(callback: CallbackQuery, state: FSMContext) -> None:
     locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
     await state.clear()
-    await callback.message.edit_text(t("account_method", locale), reply_markup=account_auth_method_keyboard(locale))
+    await edit_with_history(callback.message, t("account_method", locale), reply_markup=account_auth_method_keyboard(locale))
     await state.set_state(AccountStates.method)
     await callback.answer()
 
@@ -58,7 +59,7 @@ async def account_add_cb(callback: CallbackQuery, state: FSMContext) -> None:
 async def account_method_phone(callback: CallbackQuery, state: FSMContext) -> None:
     locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
     await state.update_data(auth_method="code")
-    await callback.message.edit_text(t("account_phone", locale), reply_markup=back_to_menu_keyboard(locale))
+    await edit_with_history(callback.message, t("account_phone", locale), reply_markup=back_to_menu_keyboard(locale))
     await state.set_state(AccountStates.phone)
     await callback.answer()
 
@@ -67,7 +68,7 @@ async def account_method_phone(callback: CallbackQuery, state: FSMContext) -> No
 async def account_method_web(callback: CallbackQuery, state: FSMContext) -> None:
     locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
     await state.update_data(auth_method="web")
-    await callback.message.edit_text(t("account_phone", locale), reply_markup=back_to_menu_keyboard(locale))
+    await edit_with_history(callback.message, t("account_phone", locale), reply_markup=back_to_menu_keyboard(locale))
     await state.set_state(AccountStates.phone)
     await callback.answer()
 
@@ -78,7 +79,7 @@ async def account_method_qr(callback: CallbackQuery, state: FSMContext) -> None:
     try:
         qr_url = await auth_flow_manager.start_qr(callback.from_user.id)
     except Exception:
-        await callback.message.edit_text(t("account_failed", locale))
+        await edit_with_history(callback.message, t("account_failed", locale))
         await state.clear()
         await callback.answer()
         return
@@ -88,7 +89,7 @@ async def account_method_qr(callback: CallbackQuery, state: FSMContext) -> None:
     buf = BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
-    await callback.message.edit_text(t("account_qr_hint", locale))
+    await edit_with_history(callback.message, t("account_qr_hint", locale))
     await callback.message.answer_photo(
         BufferedInputFile(buf.getvalue(), filename="qr.png"),
         reply_markup=account_qr_confirm_keyboard(locale),
@@ -195,7 +196,7 @@ async def account_qr_wait(callback: CallbackQuery, state: FSMContext) -> None:
     locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
     session_string, phone = await auth_flow_manager.confirm_qr(callback.from_user.id)
     if not session_string or not phone:
-        await callback.message.edit_text(t("account_failed", locale))
+        await edit_with_history(callback.message, t("account_failed", locale))
         await state.clear()
         await callback.answer()
         return
@@ -204,7 +205,7 @@ async def account_qr_wait(callback: CallbackQuery, state: FSMContext) -> None:
         service = AccountService(session)
         existing = await service.get_by_phone(phone)
         if existing and existing.owner_id != callback.from_user.id:
-            await callback.message.edit_text(t("account_taken", locale))
+            await edit_with_history(callback.message, t("account_taken", locale))
             await state.clear()
             await callback.answer()
             return
@@ -213,7 +214,7 @@ async def account_qr_wait(callback: CallbackQuery, state: FSMContext) -> None:
             await session.commit()
         else:
             await service.add_account(callback.from_user.id, phone, session_string)
-    await callback.message.edit_text(t("account_added", locale))
+    await edit_with_history(callback.message, t("account_added", locale))
     await state.clear()
     await callback.answer()
 
@@ -223,20 +224,20 @@ async def account_web_wait(callback: CallbackQuery, state: FSMContext) -> None:
     locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
     session_string, phone, status = await auth_flow_manager.confirm_web(callback.from_user.id)
     if status == "WAIT_CODE":
-        await callback.message.edit_text(t("account_web_wait", locale))
+        await edit_with_history(callback.message, t("account_web_wait", locale))
         await callback.answer()
         return
     if status == "NEED_PASSWORD":
-        await callback.message.edit_text(t("account_web_need_password", locale))
+        await edit_with_history(callback.message, t("account_web_need_password", locale))
         await callback.answer()
         return
     if status != "DONE":
-        await callback.message.edit_text(t("account_failed", locale))
+        await edit_with_history(callback.message, t("account_failed", locale))
         await state.clear()
         await callback.answer()
         return
     if not session_string or not phone:
-        await callback.message.edit_text(t("account_failed", locale))
+        await edit_with_history(callback.message, t("account_failed", locale))
         await state.clear()
         await callback.answer()
         return
@@ -245,7 +246,7 @@ async def account_web_wait(callback: CallbackQuery, state: FSMContext) -> None:
         service = AccountService(session)
         existing = await service.get_by_phone(phone)
         if existing and existing.owner_id != callback.from_user.id:
-            await callback.message.edit_text(t("account_taken", locale))
+            await edit_with_history(callback.message, t("account_taken", locale))
             await state.clear()
             await callback.answer()
             return
@@ -254,7 +255,7 @@ async def account_web_wait(callback: CallbackQuery, state: FSMContext) -> None:
             await session.commit()
         else:
             await service.add_account(callback.from_user.id, phone, session_string)
-    await callback.message.edit_text(t("account_web_ok", locale))
+    await edit_with_history(callback.message, t("account_web_ok", locale))
     await state.clear()
     await callback.answer()
 
@@ -270,14 +271,13 @@ async def account_list(message: Message) -> None:
         await message.answer(t("account_none", locale))
         return
 
-    lines = []
-    for acc in accounts:
-        status = "✅" if acc.is_active else "⛔"
-        lines.append(f"{acc.id}: {acc.phone} {status}")
-    await message.answer("\n".join(lines))
+    await message.answer(
+        t("account_choose", locale),
+        reply_markup=account_list_keyboard(accounts, locale, page=1),
+    )
 
 
-@router.callback_query(F.data == "account:list")
+@router.callback_query(F.data.startswith("account:list"))
 async def account_list_cb(callback: CallbackQuery) -> None:
     locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
     session_factory = get_session_factory()
@@ -285,19 +285,26 @@ async def account_list_cb(callback: CallbackQuery) -> None:
         accounts = await AccountService(session).list_accounts(callback.from_user.id)
 
     if not accounts:
-        await callback.message.edit_text(t("account_none", locale), reply_markup=back_to_menu_keyboard(locale))
+        await edit_with_history(callback.message, t("account_none", locale), reply_markup=back_to_menu_keyboard(locale))
         await callback.answer()
         return
 
-    await callback.message.edit_text(
+    data = callback.data.split(":")
+    page = 1
+    if len(data) >= 4 and data[2] == "page":
+        try:
+            page = max(1, int(data[3]))
+        except ValueError:
+            pass
+    await edit_with_history(callback.message, 
         t("account_choose", locale),
-        reply_markup=account_list_keyboard(accounts, locale),
+        reply_markup=account_list_keyboard(accounts, locale, page=page),
     )
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("account:select:"))
-async def account_select_cb(callback: CallbackQuery) -> None:
+async def account_select_cb(callback: CallbackQuery, state: FSMContext) -> None:
     locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
     try:
         account_id = int(callback.data.split(":")[-1])
@@ -309,10 +316,20 @@ async def account_select_cb(callback: CallbackQuery) -> None:
         accounts = await AccountService(session).list_accounts(callback.from_user.id)
         account = next((acc for acc in accounts if acc.id == account_id), None)
     if not account:
-        await callback.message.edit_text(t("account_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
+        await edit_with_history(callback.message, t("account_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
         await callback.answer()
         return
-    await callback.message.edit_text(
+    if not account.is_active:
+        await state.clear()
+        await state.set_state(AccountStates.method)
+        await edit_with_history(
+            callback.message,
+            t("account_not_bound", locale).format(phone=account.phone),
+            reply_markup=account_auth_method_keyboard(locale),
+        )
+        await callback.answer()
+        return
+    await edit_with_history(callback.message, 
         t("account_actions", locale).format(phone=account.phone),
         reply_markup=account_actions_keyboard(account.id, account.is_active, locale),
     )
@@ -333,10 +350,10 @@ async def account_activate_action_cb(callback: CallbackQuery) -> None:
         accounts = await AccountService(session).list_accounts(callback.from_user.id)
         account = next((acc for acc in accounts if acc.id == account_id), None)
     if not ok or not account:
-        await callback.message.edit_text(t("account_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
+        await edit_with_history(callback.message, t("account_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
         await callback.answer()
         return
-    await callback.message.edit_text(
+    await edit_with_history(callback.message, 
         t("account_actions", locale).format(phone=account.phone),
         reply_markup=account_actions_keyboard(account.id, account.is_active, locale),
     )
@@ -357,10 +374,10 @@ async def account_deactivate_action_cb(callback: CallbackQuery) -> None:
         accounts = await AccountService(session).list_accounts(callback.from_user.id)
         account = next((acc for acc in accounts if acc.id == account_id), None)
     if not ok or not account:
-        await callback.message.edit_text(t("account_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
+        await edit_with_history(callback.message, t("account_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
         await callback.answer()
         return
-    await callback.message.edit_text(
+    await edit_with_history(callback.message, 
         t("account_actions", locale).format(phone=account.phone),
         reply_markup=account_actions_keyboard(account.id, account.is_active, locale),
     )
@@ -370,7 +387,7 @@ async def account_deactivate_action_cb(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "account:activate")
 async def account_activate_cb(callback: CallbackQuery, state: FSMContext) -> None:
     locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
-    await callback.message.edit_text(t("enter_id", locale))
+    await edit_with_history(callback.message, t("enter_id", locale))
     await state.set_state(AccountStates.id_action)
     await state.update_data(action="activate")
     await callback.answer()
@@ -379,7 +396,7 @@ async def account_activate_cb(callback: CallbackQuery, state: FSMContext) -> Non
 @router.callback_query(F.data == "account:deactivate")
 async def account_deactivate_cb(callback: CallbackQuery, state: FSMContext) -> None:
     locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
-    await callback.message.edit_text(t("enter_id", locale))
+    await edit_with_history(callback.message, t("enter_id", locale))
     await state.set_state(AccountStates.id_action)
     await state.update_data(action="deactivate")
     await callback.answer()
@@ -389,7 +406,7 @@ async def account_deactivate_cb(callback: CallbackQuery, state: FSMContext) -> N
 async def admin_menu_cb(callback: CallbackQuery) -> None:
     locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
     if is_admin(callback.message):
-        await callback.message.edit_text(t("menu", locale), reply_markup=admin_menu_keyboard(locale))
+        await edit_with_history(callback.message, t("menu", locale), reply_markup=admin_menu_keyboard(locale))
     await callback.answer()
 
 

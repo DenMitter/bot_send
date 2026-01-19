@@ -27,6 +27,7 @@ from app.db.models import (
     MessageType,
     RecipientStatus,
 )
+from app.services.mailing.logs import append_recipient_log
 from app.services.auth import AccountService
 
 
@@ -108,6 +109,7 @@ class MailingRunner:
                 )
                 recipient.status = RecipientStatus.failed
                 recipient.error = str(exc)
+                append_recipient_log(mailing.id, recipient.user_id, recipient.username, str(exc))
             await self._session.commit()
             await asyncio.sleep(mailing.delay_seconds)
 

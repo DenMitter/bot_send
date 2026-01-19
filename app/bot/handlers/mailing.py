@@ -9,6 +9,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, FSInputFile, Message
 from sqlalchemy import func, select
 
+from app.bot.history import capture_previous_message, clear_history, edit_with_history, register_message, set_welcome_page
 from app.bot.handlers.common import is_admin, resolve_locale
 from app.bot.keyboards import (
     account_select_keyboard,
@@ -22,13 +23,14 @@ from app.bot.keyboards import (
     mailing_recipients_keyboard,
     mailing_source_keyboard,
     step_back_keyboard,
-    user_menu_keyboard,
+    welcome_entry_keyboard,
 )
 from app.core.config import get_settings
 from app.db.models import Mailing, MailingRecipient, MessageType, ParsedChat, TargetSource
 from app.db.session import get_session_factory
 from app.i18n.translator import t
 from app.services.auth import AccountService
+from app.services.mailing.logs import get_mailing_log_path
 from app.services.mailing.service import MailingService
 
 
@@ -57,7 +59,9 @@ class MailingEditStates(StatesGroup):
 
 
 async def _prompt(message: Message, state: FSMContext, text: str, reply_markup=None) -> None:
+    capture_previous_message(message.chat.id)
     sent = await message.answer(text, reply_markup=reply_markup)
+    register_message(sent)
     await state.update_data(prompt_id=sent.message_id)
 
 
@@ -66,12 +70,13 @@ async def _edit_prompt(message: Message, state: FSMContext, text: str, reply_mar
     prompt_id = data.get("prompt_id")
     if prompt_id:
         try:
-            await message.bot.edit_message_text(
+            edited = await message.bot.edit_message_text(
                 text,
                 chat_id=message.chat.id,
                 message_id=prompt_id,
                 reply_markup=reply_markup,
             )
+            register_message(edited)
             return
         except Exception:
             pass
@@ -181,7 +186,10 @@ async def mailing_account_cb(callback: CallbackQuery, state: FSMContext) -> None
             await callback.answer()
             return
     await state.update_data(account_id=account_id)
-    await callback.message.edit_text(t("mailing_source", locale), reply_markup=mailing_source_keyboard(locale))
+    await edit_with_history(callback.message, 
+        t("mailing_source", locale),
+        reply_markup=mailing_source_keyboard(locale, is_admin(callback.message)),
+    )
     await state.set_state(MailingStates.source)
     await state.update_data(prompt_id=callback.message.message_id)
     await callback.answer()
@@ -190,9 +198,12 @@ async def mailing_account_cb(callback: CallbackQuery, state: FSMContext) -> None
 @router.callback_query(F.data == "mailing:back:menu")
 async def mailing_back_menu_cb(callback: CallbackQuery) -> None:
     locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
-    await callback.message.edit_text(
-        t("start", locale),
-        reply_markup=user_menu_keyboard(locale, is_admin(callback.message)),
+    clear_history(callback.message.chat.id)
+    set_welcome_page(callback.message.chat.id, 1)
+    await edit_with_history(
+        callback.message,
+        t("welcome_caption", locale),
+        reply_markup=welcome_entry_keyboard(locale),
     )
     await callback.answer()
 
@@ -201,12 +212,15 @@ async def mailing_back_menu_cb(callback: CallbackQuery) -> None:
 async def mailing_source_cb(callback: CallbackQuery, state: FSMContext) -> None:
     locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
     value = callback.data.split(":")[-1]
+    if value == "subscribers" and not is_admin(callback.message):
+        await callback.answer(t("admin_only", locale), show_alert=True)
+        return
     await state.update_data(source=value)
     if value == "chats":
-        await callback.message.edit_text(t("mailing_chats_scope", locale), reply_markup=chats_scope_keyboard(locale))
+        await edit_with_history(callback.message, t("mailing_chats_scope", locale), reply_markup=chats_scope_keyboard(locale))
         await state.set_state(MailingStates.chats_scope)
     else:
-        await callback.message.edit_text(t("mailing_mention", locale), reply_markup=mailing_mention_keyboard(locale))
+        await edit_with_history(callback.message, t("mailing_mention", locale), reply_markup=mailing_mention_keyboard(locale))
         await state.set_state(MailingStates.mention)
     await state.update_data(prompt_id=callback.message.message_id)
     await callback.answer()
@@ -217,10 +231,10 @@ async def mailing_back_account_cb(callback: CallbackQuery, state: FSMContext) ->
     locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
     accounts = await _list_accounts(callback.from_user.id)
     if not accounts:
-        await callback.message.edit_text(t("no_account", locale), reply_markup=back_to_menu_keyboard(locale))
+        await edit_with_history(callback.message, t("no_account", locale), reply_markup=back_to_menu_keyboard(locale))
         await callback.answer()
         return
-    await callback.message.edit_text(
+    await edit_with_history(callback.message, 
         t("mailing_account", locale),
         reply_markup=account_select_keyboard(accounts, locale),
     )
@@ -233,13 +247,13 @@ async def mailing_chats_scope_cb(callback: CallbackQuery, state: FSMContext) -> 
     locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
     action = callback.data.split(":")[-1]
     if action == "back":
-        await callback.message.edit_text(t("mailing_chats_scope", locale), reply_markup=chats_scope_keyboard(locale))
+        await edit_with_history(callback.message, t("mailing_chats_scope", locale), reply_markup=chats_scope_keyboard(locale))
         await state.set_state(MailingStates.chats_scope)
         await callback.answer()
         return
     if action == "all":
         await state.update_data(chat_id=None)
-        await callback.message.edit_text(t("mailing_mention", locale), reply_markup=mailing_mention_keyboard(locale))
+        await edit_with_history(callback.message, t("mailing_mention", locale), reply_markup=mailing_mention_keyboard(locale))
         await state.set_state(MailingStates.mention)
         await callback.answer()
         return
@@ -251,12 +265,12 @@ async def mailing_chats_scope_cb(callback: CallbackQuery, state: FSMContext) -> 
         )
         chats = result.scalars().all()
     if not chats:
-        await callback.message.edit_text(t("mailing_chats_scope", locale), reply_markup=chats_scope_keyboard(locale))
+        await edit_with_history(callback.message, t("mailing_chats_scope", locale), reply_markup=chats_scope_keyboard(locale))
         await state.set_state(MailingStates.chats_scope)
         await callback.answer()
         return
     await state.update_data(selected_chat_ids=[])
-    await callback.message.edit_text(
+    await edit_with_history(callback.message, 
         f"{t('mailing_choose_chat', locale)}\n{t('mailing_choose_chat_hint', locale)}",
         reply_markup=chats_select_keyboard(chats, [], locale),
     )
@@ -286,7 +300,7 @@ async def mailing_chat_select_cb(callback: CallbackQuery, state: FSMContext) -> 
             select(ParsedChat).where(ParsedChat.owner_id == callback.from_user.id).limit(20)
         )
         chats = result.scalars().all()
-    await callback.message.edit_text(
+    await edit_with_history(callback.message, 
         f"{t('mailing_choose_chat', locale)}\n{t('mailing_choose_chat_hint', locale)}",
         reply_markup=chats_select_keyboard(chats, list(selected), locale),
     )
@@ -305,14 +319,14 @@ async def mailing_chats_done_cb(callback: CallbackQuery, state: FSMContext) -> N
                 select(ParsedChat).where(ParsedChat.owner_id == callback.from_user.id).limit(20)
             )
             chats = result.scalars().all()
-        await callback.message.edit_text(
+        await edit_with_history(callback.message, 
             f"{t('mailing_choose_chat', locale)}\n{t('mailing_need_chat', locale)}",
             reply_markup=chats_select_keyboard(chats, [], locale),
         )
         await callback.answer()
         return
     await state.update_data(chat_ids=selected)
-    await callback.message.edit_text(t("mailing_mention", locale), reply_markup=mailing_mention_keyboard(locale))
+    await edit_with_history(callback.message, t("mailing_mention", locale), reply_markup=mailing_mention_keyboard(locale))
     await state.set_state(MailingStates.mention)
     await callback.answer()
 
@@ -322,7 +336,7 @@ async def mailing_mention_cb(callback: CallbackQuery, state: FSMContext) -> None
     locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
     value = callback.data.split(":")[-1]
     await state.update_data(mention=value == "yes")
-    await callback.message.edit_text(t("mailing_delay", locale))
+    await edit_with_history(callback.message, t("mailing_delay", locale))
     await state.set_state(MailingStates.delay)
     await state.update_data(prompt_id=callback.message.message_id)
     await callback.answer()
@@ -331,7 +345,10 @@ async def mailing_mention_cb(callback: CallbackQuery, state: FSMContext) -> None
 @router.callback_query(F.data == "mailing:back:source")
 async def mailing_back_source_cb(callback: CallbackQuery, state: FSMContext) -> None:
     locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
-    await callback.message.edit_text(t("mailing_source", locale), reply_markup=mailing_source_keyboard(locale))
+    await edit_with_history(callback.message, 
+        t("mailing_source", locale),
+        reply_markup=mailing_source_keyboard(locale, is_admin(callback.message)),
+    )
     await state.set_state(MailingStates.source)
     await callback.answer()
 
@@ -339,7 +356,7 @@ async def mailing_back_source_cb(callback: CallbackQuery, state: FSMContext) -> 
 @router.callback_query(F.data == "mailing:back:mention")
 async def mailing_back_mention_cb(callback: CallbackQuery, state: FSMContext) -> None:
     locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
-    await callback.message.edit_text(t("mailing_mention", locale), reply_markup=mailing_mention_keyboard(locale))
+    await edit_with_history(callback.message, t("mailing_mention", locale), reply_markup=mailing_mention_keyboard(locale))
     await state.set_state(MailingStates.mention)
     await callback.answer()
 
@@ -347,7 +364,7 @@ async def mailing_back_mention_cb(callback: CallbackQuery, state: FSMContext) ->
 @router.callback_query(F.data == "mailing:back:delay")
 async def mailing_back_delay_cb(callback: CallbackQuery, state: FSMContext) -> None:
     locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
-    await callback.message.edit_text(t("mailing_delay", locale), reply_markup=step_back_keyboard(locale, "mailing:back:mention"))
+    await edit_with_history(callback.message, t("mailing_delay", locale), reply_markup=step_back_keyboard(locale, "mailing:back:mention"))
     await state.set_state(MailingStates.delay)
     await callback.answer()
 
@@ -355,7 +372,7 @@ async def mailing_back_delay_cb(callback: CallbackQuery, state: FSMContext) -> N
 @router.callback_query(F.data == "mailing:back:limit")
 async def mailing_back_limit_cb(callback: CallbackQuery, state: FSMContext) -> None:
     locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
-    await callback.message.edit_text(t("mailing_limit", locale), reply_markup=step_back_keyboard(locale, "mailing:back:delay"))
+    await edit_with_history(callback.message, t("mailing_limit", locale), reply_markup=step_back_keyboard(locale, "mailing:back:delay"))
     await state.set_state(MailingStates.limit)
     await callback.answer()
 
@@ -458,11 +475,11 @@ async def mailing_edit_cb(callback: CallbackQuery, state: FSMContext) -> None:
     async with session_factory() as session:
         mailing = await MailingService(session).get_mailing(callback.from_user.id, mailing_id)
     if not mailing:
-        await callback.message.edit_text(t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
+        await edit_with_history(callback.message, t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
         await callback.answer()
         return
     await state.update_data(mailing_id=mailing_id)
-    await callback.message.edit_text(
+    await edit_with_history(callback.message, 
         t("mailing_edit_content", locale),
         reply_markup=step_back_keyboard(locale, f"mailing:select:{mailing_id}"),
     )
@@ -596,10 +613,10 @@ async def mailing_new_cb(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     accounts = await _list_accounts(callback.from_user.id)
     if not accounts:
-        await callback.message.edit_text(t("no_account", locale), reply_markup=back_to_menu_keyboard(locale))
+        await edit_with_history(callback.message, t("no_account", locale), reply_markup=back_to_menu_keyboard(locale))
         await callback.answer()
         return
-    await callback.message.edit_text(
+    await edit_with_history(callback.message, 
         t("mailing_account", locale),
         reply_markup=account_select_keyboard(accounts, locale),
     )
@@ -616,10 +633,10 @@ async def mailing_list_cb(callback: CallbackQuery) -> None:
         result = await session.execute(select(Mailing).where(Mailing.owner_id == callback.from_user.id))
         mailings = result.scalars().all()
     if not mailings:
-        await callback.message.edit_text(t("mailing_none", locale), reply_markup=back_to_menu_keyboard(locale))
+        await edit_with_history(callback.message, t("mailing_none", locale), reply_markup=back_to_menu_keyboard(locale))
         await callback.answer()
         return
-    await callback.message.edit_text(
+    await edit_with_history(callback.message, 
         t("mailing_choose", locale),
         reply_markup=mailing_list_keyboard(mailings, locale),
     )
@@ -641,10 +658,10 @@ async def mailing_select_cb(callback: CallbackQuery) -> None:
         )
         mailing = result.scalars().first()
     if not mailing:
-        await callback.message.edit_text(t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
+        await edit_with_history(callback.message, t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
         await callback.answer()
         return
-    await callback.message.edit_text(
+    await edit_with_history(callback.message, 
         t("mailing_actions", locale).format(id=mailing.id),
         reply_markup=mailing_actions_keyboard(mailing.id, mailing.status.value, locale),
     )
@@ -667,10 +684,10 @@ async def mailing_pause_action_cb(callback: CallbackQuery) -> None:
         )
         mailing = result.scalars().first()
     if not ok or not mailing:
-        await callback.message.edit_text(t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
+        await edit_with_history(callback.message, t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
         await callback.answer()
         return
-    await callback.message.edit_text(
+    await edit_with_history(callback.message, 
         t("mailing_actions", locale).format(id=mailing.id),
         reply_markup=mailing_actions_keyboard(mailing.id, mailing.status.value, locale),
     )
@@ -693,12 +710,40 @@ async def mailing_resume_action_cb(callback: CallbackQuery) -> None:
         )
         mailing = result.scalars().first()
     if not ok or not mailing:
-        await callback.message.edit_text(t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
+        await edit_with_history(callback.message, t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
         await callback.answer()
         return
-    await callback.message.edit_text(
+    await edit_with_history(callback.message, 
         t("mailing_actions", locale).format(id=mailing.id),
         reply_markup=mailing_actions_keyboard(mailing.id, mailing.status.value, locale),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mailing:log:"))
+async def mailing_log_cb(callback: CallbackQuery) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    try:
+        mailing_id = int(callback.data.split(":")[-1])
+    except ValueError:
+        await callback.answer()
+        return
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        result = await session.execute(
+            select(Mailing).where(Mailing.owner_id == callback.from_user.id, Mailing.id == mailing_id)
+        )
+        mailing = result.scalars().first()
+    if not mailing:
+        await callback.answer(t("mailing_not_found", locale))
+        return
+    log_path = get_mailing_log_path(mailing_id)
+    if not log_path.exists():
+        await callback.answer(t("mailing_log_missing", locale), show_alert=True)
+        return
+    await callback.message.answer_document(
+        FSInputFile(str(log_path), filename=f"mailing_{mailing_id}_log.txt"),
+        caption=t("mailing_log_caption", locale).format(id=mailing_id),
     )
     await callback.answer()
 
@@ -716,14 +761,14 @@ async def mailing_details_cb(callback: CallbackQuery) -> None:
         service = MailingService(session)
         mailing = await service.get_mailing(callback.from_user.id, mailing_id)
         if not mailing:
-            await callback.message.edit_text(t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
+            await edit_with_history(callback.message, t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
             await callback.answer()
             return
         stats = await service.get_stats(callback.from_user.id, mailing_id)
     source = mailing.target_source.value
     mention = "yes" if mailing.mention else "no"
     try:
-        await callback.message.edit_text(
+        await edit_with_history(callback.message, 
             t("mailing_details", locale).format(
                 id=mailing.id,
                 status=mailing.status.value,
@@ -764,7 +809,7 @@ async def mailing_details_recipients_cb(callback: CallbackQuery) -> None:
         service = MailingService(session)
         mailing = await service.get_mailing(callback.from_user.id, mailing_id)
         if not mailing:
-            await callback.message.edit_text(t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
+            await edit_with_history(callback.message, t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
             await callback.answer()
             return
         result = await session.execute(
@@ -812,7 +857,7 @@ async def mailing_details_recipients_cb(callback: CallbackQuery) -> None:
             lines.append(f"{start_index + idx}. {label}")
         text = f"{header}\n" + "\n".join(lines)
 
-    await callback.message.edit_text(
+    await edit_with_history(callback.message, 
         text,
         reply_markup=mailing_recipients_keyboard(mailing_id, page, total_pages, locale),
     )
@@ -832,7 +877,7 @@ async def mailing_details_message_cb(callback: CallbackQuery) -> None:
         service = MailingService(session)
         mailing = await service.get_mailing(callback.from_user.id, mailing_id)
     if not mailing:
-        await callback.message.edit_text(t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
+        await edit_with_history(callback.message, t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
         await callback.answer()
         return
     if not mailing.text and not mailing.media_path:
@@ -880,10 +925,10 @@ async def mailing_repeat_cb(callback: CallbackQuery) -> None:
         service = MailingService(session)
         clone = await service.repeat(callback.from_user.id, mailing_id)
     if not clone:
-        await callback.message.edit_text(t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
+        await edit_with_history(callback.message, t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
         await callback.answer()
         return
-    await callback.message.edit_text(
+    await edit_with_history(callback.message, 
         t("mailing_repeated", locale).format(id=clone.id),
         reply_markup=mailing_actions_keyboard(clone.id, clone.status.value, locale),
     )
@@ -905,14 +950,14 @@ async def mailing_delete_cb(callback: CallbackQuery) -> None:
         result = await session.execute(select(Mailing).where(Mailing.owner_id == callback.from_user.id))
         mailings = result.scalars().all()
     if not ok:
-        await callback.message.edit_text(t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
+        await edit_with_history(callback.message, t("mailing_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
         await callback.answer()
         return
     if not mailings:
-        await callback.message.edit_text(t("mailing_none", locale), reply_markup=back_to_menu_keyboard(locale))
+        await edit_with_history(callback.message, t("mailing_none", locale), reply_markup=back_to_menu_keyboard(locale))
         await callback.answer()
         return
-    await callback.message.edit_text(
+    await edit_with_history(callback.message, 
         t("mailing_choose", locale),
         reply_markup=mailing_list_keyboard(mailings, locale),
     )
