@@ -8,6 +8,7 @@ from typing import Optional, Sequence
 
 from app.bot.history import (
     clear_history,
+    edit_with_history,
     get_welcome_page,
     pop_state,
     push_state,

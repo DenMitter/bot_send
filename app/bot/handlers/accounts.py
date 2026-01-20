@@ -1,6 +1,7 @@
 ﻿from io import BytesIO
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -23,6 +24,20 @@ from app.db.session import get_session_factory
 from app.i18n.translator import t
 from app.services.auth import AccountService
 from app.services.auth_registry import auth_flow_manager
+
+
+async def _reply_with_history(message: Message, text: str, reply_markup=None) -> Message:
+    try:
+        return await edit_with_history(message, text, reply_markup=reply_markup)
+    except TelegramBadRequest:
+        return await message.answer(text, reply_markup=reply_markup)
+
+
+async def _safe_callback_answer(callback: CallbackQuery) -> None:
+    try:
+        await callback.answer()
+    except TelegramBadRequest:
+        pass
 
 
 router = Router()
@@ -52,7 +67,7 @@ async def account_add_cb(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await edit_with_history(callback.message, t("account_method", locale), reply_markup=account_auth_method_keyboard(locale))
     await state.set_state(AccountStates.method)
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
 
 @router.callback_query(F.data == "auth:phone")
@@ -61,7 +76,7 @@ async def account_method_phone(callback: CallbackQuery, state: FSMContext) -> No
     await state.update_data(auth_method="code")
     await edit_with_history(callback.message, t("account_phone", locale), reply_markup=back_to_menu_keyboard(locale))
     await state.set_state(AccountStates.phone)
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
 
 @router.callback_query(F.data == "auth:web")
@@ -70,7 +85,7 @@ async def account_method_web(callback: CallbackQuery, state: FSMContext) -> None
     await state.update_data(auth_method="web")
     await edit_with_history(callback.message, t("account_phone", locale), reply_markup=back_to_menu_keyboard(locale))
     await state.set_state(AccountStates.phone)
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
 
 @router.callback_query(F.data == "auth:qr")
@@ -81,7 +96,7 @@ async def account_method_qr(callback: CallbackQuery, state: FSMContext) -> None:
     except Exception:
         await edit_with_history(callback.message, t("account_failed", locale))
         await state.clear()
-        await callback.answer()
+        await _safe_callback_answer(callback)
         return
     qr = qrcode.QRCode(border=1)
     qr.add_data(qr_url)
@@ -95,7 +110,7 @@ async def account_method_qr(callback: CallbackQuery, state: FSMContext) -> None:
         reply_markup=account_qr_confirm_keyboard(locale),
     )
     await state.set_state(AccountStates.qr_wait)
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
 
 @router.message(AccountStates.phone)
@@ -196,27 +211,30 @@ async def account_qr_wait(callback: CallbackQuery, state: FSMContext) -> None:
     locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
     session_string, phone = await auth_flow_manager.confirm_qr(callback.from_user.id)
     if not session_string or not phone:
-        await edit_with_history(callback.message, t("account_failed", locale))
+        await _reply_with_history(callback.message, t("account_failed", locale))
         await state.clear()
-        await callback.answer()
+        await _safe_callback_answer(callback)
         return
     session_factory = get_session_factory()
     async with session_factory() as session:
         service = AccountService(session)
         existing = await service.get_by_phone(phone)
         if existing and existing.owner_id != callback.from_user.id:
-            await edit_with_history(callback.message, t("account_taken", locale))
+            await _reply_with_history(callback.message, t("account_taken", locale))
             await state.clear()
-            await callback.answer()
+            await _safe_callback_answer(callback)
             return
         if existing:
             existing.session_string = session_string
             await session.commit()
         else:
             await service.add_account(callback.from_user.id, phone, session_string)
-    await edit_with_history(callback.message, t("account_added", locale))
+    await _reply_with_history(callback.message, t("account_added", locale))
     await state.clear()
-    await callback.answer()
+    try:
+        await _safe_callback_answer(callback)
+    except TelegramBadRequest:
+        pass
 
 
 @router.callback_query(F.data == "auth:web_check")
@@ -225,21 +243,21 @@ async def account_web_wait(callback: CallbackQuery, state: FSMContext) -> None:
     session_string, phone, status = await auth_flow_manager.confirm_web(callback.from_user.id)
     if status == "WAIT_CODE":
         await edit_with_history(callback.message, t("account_web_wait", locale))
-        await callback.answer()
+        await _safe_callback_answer(callback)
         return
     if status == "NEED_PASSWORD":
         await edit_with_history(callback.message, t("account_web_need_password", locale))
-        await callback.answer()
+        await _safe_callback_answer(callback)
         return
     if status != "DONE":
         await edit_with_history(callback.message, t("account_failed", locale))
         await state.clear()
-        await callback.answer()
+        await _safe_callback_answer(callback)
         return
     if not session_string or not phone:
         await edit_with_history(callback.message, t("account_failed", locale))
         await state.clear()
-        await callback.answer()
+        await _safe_callback_answer(callback)
         return
     session_factory = get_session_factory()
     async with session_factory() as session:
@@ -248,7 +266,7 @@ async def account_web_wait(callback: CallbackQuery, state: FSMContext) -> None:
         if existing and existing.owner_id != callback.from_user.id:
             await edit_with_history(callback.message, t("account_taken", locale))
             await state.clear()
-            await callback.answer()
+            await _safe_callback_answer(callback)
             return
         if existing:
             existing.session_string = session_string
@@ -257,7 +275,7 @@ async def account_web_wait(callback: CallbackQuery, state: FSMContext) -> None:
             await service.add_account(callback.from_user.id, phone, session_string)
     await edit_with_history(callback.message, t("account_web_ok", locale))
     await state.clear()
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
 
 @router.message(Command("account_list"))
@@ -286,7 +304,7 @@ async def account_list_cb(callback: CallbackQuery) -> None:
 
     if not accounts:
         await edit_with_history(callback.message, t("account_none", locale), reply_markup=back_to_menu_keyboard(locale))
-        await callback.answer()
+        await _safe_callback_answer(callback)
         return
 
     data = callback.data.split(":")
@@ -300,7 +318,7 @@ async def account_list_cb(callback: CallbackQuery) -> None:
         t("account_choose", locale),
         reply_markup=account_list_keyboard(accounts, locale, page=page),
     )
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
 
 @router.callback_query(F.data.startswith("account:select:"))
@@ -309,7 +327,7 @@ async def account_select_cb(callback: CallbackQuery, state: FSMContext) -> None:
     try:
         account_id = int(callback.data.split(":")[-1])
     except ValueError:
-        await callback.answer()
+        await _safe_callback_answer(callback)
         return
     session_factory = get_session_factory()
     async with session_factory() as session:
@@ -317,7 +335,7 @@ async def account_select_cb(callback: CallbackQuery, state: FSMContext) -> None:
         account = next((acc for acc in accounts if acc.id == account_id), None)
     if not account:
         await edit_with_history(callback.message, t("account_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
-        await callback.answer()
+        await _safe_callback_answer(callback)
         return
     if not account.is_active:
         await state.clear()
@@ -327,13 +345,13 @@ async def account_select_cb(callback: CallbackQuery, state: FSMContext) -> None:
             t("account_not_bound", locale).format(phone=account.phone),
             reply_markup=account_auth_method_keyboard(locale),
         )
-        await callback.answer()
+        await _safe_callback_answer(callback)
         return
     await edit_with_history(callback.message, 
         t("account_actions", locale).format(phone=account.phone),
         reply_markup=account_actions_keyboard(account.id, account.is_active, locale),
     )
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
 
 @router.callback_query(F.data.startswith("account:act:"))
@@ -342,7 +360,7 @@ async def account_activate_action_cb(callback: CallbackQuery) -> None:
     try:
         account_id = int(callback.data.split(":")[-1])
     except ValueError:
-        await callback.answer()
+        await _safe_callback_answer(callback)
         return
     session_factory = get_session_factory()
     async with session_factory() as session:
@@ -351,13 +369,13 @@ async def account_activate_action_cb(callback: CallbackQuery) -> None:
         account = next((acc for acc in accounts if acc.id == account_id), None)
     if not ok or not account:
         await edit_with_history(callback.message, t("account_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
-        await callback.answer()
+        await _safe_callback_answer(callback)
         return
     await edit_with_history(callback.message, 
         t("account_actions", locale).format(phone=account.phone),
         reply_markup=account_actions_keyboard(account.id, account.is_active, locale),
     )
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
 
 @router.callback_query(F.data.startswith("account:deact:"))
@@ -366,7 +384,7 @@ async def account_deactivate_action_cb(callback: CallbackQuery) -> None:
     try:
         account_id = int(callback.data.split(":")[-1])
     except ValueError:
-        await callback.answer()
+        await _safe_callback_answer(callback)
         return
     session_factory = get_session_factory()
     async with session_factory() as session:
@@ -375,13 +393,13 @@ async def account_deactivate_action_cb(callback: CallbackQuery) -> None:
         account = next((acc for acc in accounts if acc.id == account_id), None)
     if not ok or not account:
         await edit_with_history(callback.message, t("account_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
-        await callback.answer()
+        await _safe_callback_answer(callback)
         return
     await edit_with_history(callback.message, 
         t("account_actions", locale).format(phone=account.phone),
         reply_markup=account_actions_keyboard(account.id, account.is_active, locale),
     )
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
 
 @router.callback_query(F.data == "account:activate")
@@ -390,7 +408,7 @@ async def account_activate_cb(callback: CallbackQuery, state: FSMContext) -> Non
     await edit_with_history(callback.message, t("enter_id", locale))
     await state.set_state(AccountStates.id_action)
     await state.update_data(action="activate")
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
 
 @router.callback_query(F.data == "account:deactivate")
@@ -399,7 +417,7 @@ async def account_deactivate_cb(callback: CallbackQuery, state: FSMContext) -> N
     await edit_with_history(callback.message, t("enter_id", locale))
     await state.set_state(AccountStates.id_action)
     await state.update_data(action="deactivate")
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
 
 @router.callback_query(F.data == "admin:menu")
@@ -407,7 +425,7 @@ async def admin_menu_cb(callback: CallbackQuery) -> None:
     locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
     if is_admin(callback.message):
         await edit_with_history(callback.message, t("menu", locale), reply_markup=admin_menu_keyboard(locale))
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
 
 @router.message(AccountStates.id_action)

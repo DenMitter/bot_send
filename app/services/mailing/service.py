@@ -149,6 +149,7 @@ class MailingService:
                     mailing_id=clone.id,
                     user_id=rec.user_id,
                     username=rec.username,
+                    access_hash=rec.access_hash,
                     status=RecipientStatus.pending,
                 )
             )
@@ -215,6 +216,7 @@ class MailingService:
                     mailing_id=mailing.id,
                     user_id=target_id,
                     username=None,
+                    access_hash=None,
                 )
                 self._session.add(recipient)
                 count += 1
@@ -244,6 +246,7 @@ class MailingService:
                 mailing_id=mailing.id,
                 user_id=target_id,
                 username=getattr(user, "username", None),
+                access_hash=getattr(user, "access_hash", None),
             )
             self._session.add(recipient)
             count += 1

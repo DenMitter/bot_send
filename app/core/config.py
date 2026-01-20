@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+BASE_DIR = Path(__file__).resolve().parents[2]
+
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
+    model_config = SettingsConfigDict(env_file=str(BASE_DIR / ".env"), case_sensitive=False)
 
     bot_token: str
     api_id: int
@@ -21,6 +26,8 @@ class Settings(BaseSettings):
     web_auth_host: str = "127.0.0.1"
     web_auth_port: int = 8080
     web_auth_base_url: str = "http://127.0.0.1:8080"
+
+    telethon_log_level: str | None = None
 
     def admin_id_set(self) -> set[int]:
         if not self.admin_ids:

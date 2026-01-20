@@ -74,6 +74,7 @@ class ParsedUser(Base):
     username: Mapped[str | None] = mapped_column(String(64))
     first_name: Mapped[str | None] = mapped_column(String(64))
     last_name: Mapped[str | None] = mapped_column(String(64))
+    access_hash: Mapped[int | None] = mapped_column(BigInteger)
     source: Mapped[str | None] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -88,6 +89,7 @@ class ParsedChat(Base):
     title: Mapped[str | None] = mapped_column(String(255))
     username: Mapped[str | None] = mapped_column(String(64))
     chat_type: Mapped[str | None] = mapped_column(String(32))
+    access_hash: Mapped[int | None] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -126,6 +128,7 @@ class MailingRecipient(Base):
     mailing_id: Mapped[int] = mapped_column(ForeignKey("mailings.id"))
     user_id: Mapped[int] = mapped_column(BigInteger)
     username: Mapped[str | None] = mapped_column(String(64))
+    access_hash: Mapped[int | None] = mapped_column(BigInteger)
 
     status: Mapped[RecipientStatus] = mapped_column(Enum(RecipientStatus), default=RecipientStatus.pending)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime)

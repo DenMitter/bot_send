@@ -1,0 +1,1 @@
+[2026-01-20T07:27:20.186749] recipient=5057103985 username=- error=Could not find the input entity for PeerUser(user_id=5057103985) (PeerUser). Please read https://docs.telethon.dev/en/stable/concepts/entities.html to find out more details.

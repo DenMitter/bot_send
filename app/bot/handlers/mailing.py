@@ -8,6 +8,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, FSInputFile, Message
 from sqlalchemy import func, select
+from telethon import errors as telethon_errors
+from telethon.errors.rpcerrorlist import AuthKeyUnregisteredError
 
 from app.bot.history import capture_previous_message, clear_history, edit_with_history, register_message, set_welcome_page
 from app.bot.handlers.common import is_admin, resolve_locale
@@ -25,6 +27,7 @@ from app.bot.keyboards import (
     step_back_keyboard,
     welcome_entry_keyboard,
 )
+from app.client.telethon_manager import TelethonManager
 from app.core.config import get_settings
 from app.db.models import Mailing, MailingRecipient, MessageType, ParsedChat, TargetSource
 from app.db.session import get_session_factory
@@ -32,9 +35,11 @@ from app.i18n.translator import t
 from app.services.auth import AccountService
 from app.services.mailing.logs import get_mailing_log_path
 from app.services.mailing.service import MailingService
+from app.services.parser import ParserService
 
 
 router = Router()
+_parser_manager = TelethonManager()
 
 RECIPIENTS_PAGE_SIZE = 10
 
@@ -260,6 +265,28 @@ async def mailing_chats_scope_cb(callback: CallbackQuery, state: FSMContext) -> 
 
     session_factory = get_session_factory()
     async with session_factory() as session:
+        service = AccountService(session)
+        account = await service.get_active_account(callback.from_user.id)
+        if not account:
+            await edit_with_history(callback.message, t("no_account", locale), reply_markup=back_to_menu_keyboard(locale))
+            await callback.answer()
+            return
+        parser = ParserService(session, _parser_manager)
+        try:
+            await parser.parse_groups(account, callback.from_user.id)
+        except AuthKeyUnregisteredError:
+            await service.set_active(callback.from_user.id, account.id, False)
+            await callback.answer(t("account_not_bound", locale).format(phone=account.phone), show_alert=True)
+            return
+        except telethon_errors.RPCError as err:
+            if isinstance(err, telethon_errors.UnauthorizedError) or "UNAUTHORIZED" in getattr(err, "message", ""):
+                await callback.answer(t("parse_unauthorized", locale), show_alert=True)
+            else:
+                await callback.answer(
+                    t("parse_failed", locale).format(error=getattr(err, "message", "RPC error")),
+                    show_alert=True,
+                )
+            return
         result = await session.execute(
             select(ParsedChat).where(ParsedChat.owner_id == callback.from_user.id).limit(20)
         )

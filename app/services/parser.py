@@ -30,6 +30,7 @@ class ParserService:
                 username=user.username,
                 first_name=user.first_name,
                 last_name=user.last_name,
+                access_hash=getattr(user, "access_hash", None),
                 source=chat,
             )
             self._session.add(parsed)
@@ -68,6 +69,7 @@ class ParserService:
                 title=title,
                 username=username,
                 chat_type=chat_type,
+                access_hash=getattr(entity, "access_hash", None),
             )
             self._session.add(parsed)
             added += 1

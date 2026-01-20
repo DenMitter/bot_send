@@ -9,10 +9,12 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from PIL import Image
+from telethon.errors import RPCError
 from telethon.tl.functions.messages import GetStickerSetRequest
 from telethon.tl.types import (
     DocumentAttributeImageSize,
     DocumentAttributeSticker,
+    InputPeerUser,
     InputStickerSetEmpty,
     InputStickerSetShortName,
 )
@@ -118,9 +120,9 @@ class MailingRunner:
         if mailing.mention and recipient.username:
             base_text = f"{base_text}\n@{recipient.username}" if base_text else f"@{recipient.username}"
 
-        target = recipient.user_id
-        if recipient.username:
-            target = f"@{recipient.username}"
+        target = await self._resolve_target_entity(client, recipient)
+        if not target:
+            raise RuntimeError(f"Could not resolve input entity for recipient={recipient.user_id}")
 
         if mailing.message_type == MessageType.text:
             await client.send_message(target, base_text)
@@ -182,6 +184,20 @@ class MailingRunner:
         if os.path.isabs(media_path):
             return media_path
         return str((self._base_dir / media_path).resolve())
+
+    async def _resolve_target_entity(self, client, recipient: MailingRecipient):
+        if recipient.access_hash:
+            return InputPeerUser(recipient.user_id, recipient.access_hash)
+        if recipient.username:
+            normalized = f"@{recipient.username.lstrip('@')}"
+            try:
+                return await client.get_input_entity(normalized)
+            except (RPCError, ValueError):
+                pass
+        try:
+            return await client.get_input_entity(recipient.user_id)
+        except (RPCError, ValueError):
+            return None
 
     async def _resolve_account(self, mailing: Mailing) -> Account | None:
         if mailing.account_id:
