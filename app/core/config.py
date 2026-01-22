@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -27,7 +28,7 @@ class Settings(BaseSettings):
     web_auth_port: int = 8080
     web_auth_base_url: str = "http://127.0.0.1:8080"
 
-    telethon_log_level: str | None = None
+    telethon_log_level: Optional[str] = None
 
     def admin_id_set(self) -> set[int]:
         if not self.admin_ids:
@@ -35,7 +36,7 @@ class Settings(BaseSettings):
         return {int(x.strip()) for x in self.admin_ids.split(",") if x.strip()}
 
 
-_settings: Settings | None = None
+_settings: Optional[Settings] = None
 
 
 def get_settings() -> Settings:

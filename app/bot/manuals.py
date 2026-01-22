@@ -82,8 +82,8 @@ async def _send_manual_message(
     chat_id: int,
     text: str,
     media_path: Optional[str],
-    reply_markup: InlineKeyboardMarkup | None,
-    parse_mode: str | None = "Markdown",
+    reply_markup: Optional[InlineKeyboardMarkup],
+    parse_mode: Optional[str] = "Markdown",
 ) -> tuple[Message, bool]:
     if media_path:
         photo_source = FSInputFile(media_path) if not media_path.startswith("http") else media_path
@@ -99,8 +99,8 @@ async def render_manual_message(
     chat_id: int,
     text: str,
     media_path: Optional[str],
-    reply_markup: InlineKeyboardMarkup | None,
-    parse_mode: str | None = "Markdown",
+    reply_markup: Optional[InlineKeyboardMarkup],
+    parse_mode: Optional[str] = "Markdown",
 ) -> Message:
     session = get_manual_session(chat_id)
     is_photo = bool(media_path)

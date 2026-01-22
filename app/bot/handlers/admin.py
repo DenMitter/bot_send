@@ -1,3 +1,5 @@
+from typing import Optional
+
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -29,7 +31,7 @@ class ParseStates(StatesGroup):
     chat = State()
 
 
-def _format_parsed_field(value: str | None) -> str:
+def _format_parsed_field(value: Optional[str]) -> str:
     if not value:
         return ""
     return value.replace("\t", " ").replace("\n", " ")

@@ -37,7 +37,7 @@ from app.bot.manuals import clear_manual_media, load_manual_page, render_manual_
 router = Router()
 
 
-def _first_media_path(media_paths: Sequence[str] | None) -> Optional[str]:
+def _first_media_path(media_paths: Optional[Sequence[str]]) -> Optional[str]:
     if not media_paths:
         return None
     return next((path for path in media_paths if path), None)

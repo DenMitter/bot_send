@@ -5,6 +5,7 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -199,7 +200,7 @@ class MailingRunner:
         except (RPCError, ValueError):
             return None
 
-    async def _resolve_account(self, mailing: Mailing) -> Account | None:
+    async def _resolve_account(self, mailing: Mailing) -> Optional[Account]:
         if mailing.account_id:
             result = await self._session.execute(
                 select(Account).where(Account.id == mailing.account_id, Account.owner_id == mailing.owner_id)

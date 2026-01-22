@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from aiogram.types import InlineKeyboardMarkup, Message
 
@@ -13,7 +13,7 @@ STACK_LIMIT = 25
 class MessageSnapshot:
     message_id: int
     text: str
-    reply_markup: InlineKeyboardMarkup | None
+    reply_markup: Optional[InlineKeyboardMarkup]
     options: Dict[str, Any]
     media_paths: List[str] = field(default_factory=list)
 
@@ -37,7 +37,7 @@ def _push_snapshot(chat_id: int, snapshot: MessageSnapshot) -> None:
 def push_state(
     message: Message,
     options: Dict[str, Any],
-    media_paths: Sequence[str] | None = None,
+    media_paths: Optional[Sequence[str]] = None,
 ) -> None:
     _push_snapshot(
         message.chat.id,
@@ -60,8 +60,8 @@ def capture_previous_message(chat_id: int) -> None:
 
 def register_message(
     message: Message,
-    options: Dict[str, Any] | None = None,
-    media_paths: Sequence[str] | None = None,
+    options: Optional[Dict[str, Any]] = None,
+    media_paths: Optional[Sequence[str]] = None,
 ) -> None:
     _last_message[message.chat.id] = MessageSnapshot(
         message_id=message.message_id,
@@ -72,7 +72,7 @@ def register_message(
     )
 
 
-def pop_state(chat_id: int) -> MessageSnapshot | None:
+def pop_state(chat_id: int) -> Optional[MessageSnapshot]:
     stack = _history.get(chat_id)
     if not stack:
         return None
@@ -96,8 +96,8 @@ def get_welcome_page(chat_id: int) -> int:
 async def edit_with_history(
     message: Message,
     text: str,
-    reply_markup: InlineKeyboardMarkup | None = None,
-    media_paths: Sequence[str] | None = None,
+    reply_markup: Optional[InlineKeyboardMarkup] = None,
+    media_paths: Optional[Sequence[str]] = None,
     **options: Any,
 ) -> Message:
     push_state(message, options, media_paths)

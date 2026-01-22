@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,16 +27,16 @@ class MailingService:
     async def create_mailing(
         self,
         owner_id: int,
-        account_id: int | None,
-        chat_id: int | None,
-        target_ids: list[int] | None,
+        account_id: Optional[int],
+        chat_id: Optional[int],
+        target_ids: Optional[list[int]],
         target_source: TargetSource,
         message_type: MessageType,
-        text: str | None,
-        media_path: str | None,
-        media_file_id: str | None,
-        sticker_set_name: str | None,
-        sticker_set_index: int | None,
+        text: Optional[str],
+        media_path: Optional[str],
+        media_file_id: Optional[str],
+        sticker_set_name: Optional[str],
+        sticker_set_index: Optional[int],
         mention: bool,
         delay_seconds: float,
         limit_count: int,
@@ -84,11 +85,11 @@ class MailingService:
         await self._session.commit()
         return True
 
-    async def get_status(self, owner_id: int, mailing_id: int) -> MailingStatus | None:
+    async def get_status(self, owner_id: int, mailing_id: int) -> Optional[MailingStatus]:
         mailing = await self._get_mailing(owner_id, mailing_id)
         return mailing.status if mailing else None
 
-    async def get_mailing(self, owner_id: int, mailing_id: int) -> Mailing | None:
+    async def get_mailing(self, owner_id: int, mailing_id: int) -> Optional[Mailing]:
         return await self._get_mailing(owner_id, mailing_id)
 
     async def get_stats(self, owner_id: int, mailing_id: int) -> dict[str, int]:
@@ -113,7 +114,7 @@ class MailingService:
         pending = max(total - sent - failed, 0)
         return {"total": total, "sent": sent, "failed": failed, "pending": pending}
 
-    async def repeat(self, owner_id: int, mailing_id: int) -> Mailing | None:
+    async def repeat(self, owner_id: int, mailing_id: int) -> Optional[Mailing]:
         mailing = await self._get_mailing(owner_id, mailing_id)
         if not mailing:
             return None
@@ -161,12 +162,12 @@ class MailingService:
         owner_id: int,
         mailing_id: int,
         message_type: MessageType,
-        text: str | None,
-        media_path: str | None,
-        media_file_id: str | None,
-        sticker_set_name: str | None,
-        sticker_set_index: int | None,
-    ) -> Mailing | None:
+        text: Optional[str],
+        media_path: Optional[str],
+        media_file_id: Optional[str],
+        sticker_set_name: Optional[str],
+        sticker_set_index: Optional[int],
+    ) -> Optional[Mailing]:
         mailing = await self._get_mailing(owner_id, mailing_id)
         if not mailing:
             return None
@@ -198,7 +199,7 @@ class MailingService:
                 pass
         return True
 
-    async def _get_mailing(self, owner_id: int, mailing_id: int) -> Mailing | None:
+    async def _get_mailing(self, owner_id: int, mailing_id: int) -> Optional[Mailing]:
         result = await self._session.execute(
             select(Mailing).where(Mailing.id == mailing_id, Mailing.owner_id == owner_id)
         )
