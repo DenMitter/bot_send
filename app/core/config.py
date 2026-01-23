@@ -1,11 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-<<<<<<< HEAD
 from typing import Optional, Set
-=======
-from typing import Optional
->>>>>>> 9dd19731839bc17800be4d7e8cd1e3ac8fafa344
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
