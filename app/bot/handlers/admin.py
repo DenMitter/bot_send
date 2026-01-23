@@ -3,6 +3,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
+from typing import Optional
 from io import StringIO
 
 from sqlalchemy import select
@@ -29,7 +30,7 @@ class ParseStates(StatesGroup):
     chat = State()
 
 
-def _format_parsed_field(value: str | None) -> str:
+def _format_parsed_field(value: Optional[str]) -> str:
     if not value:
         return ""
     return value.replace("\t", " ").replace("\n", " ")

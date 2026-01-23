@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Dict, Optional, Tuple
 from uuid import uuid4
 
 from telethon import TelegramClient
@@ -12,20 +13,20 @@ from app.core.config import get_settings
 
 @dataclass
 class AuthFlow:
-    phone: str | None
+    phone: Optional[str]
     client: TelegramClient
     mode: str
-    qr_login: object | None = None
-    web_token: str | None = None
-    code: str | None = None
-    password: str | None = None
+    qr_login: Optional[object] = None
+    web_token: Optional[str] = None
+    code: Optional[str] = None
+    password: Optional[str] = None
     needs_password: bool = False
 
 
 class AuthFlowManager:
     def __init__(self) -> None:
-        self._flows: dict[int, AuthFlow] = {}
-        self._token_index: dict[str, int] = {}
+        self._flows: Dict[int, AuthFlow] = {}
+        self._token_index: Dict[str, int] = {}
 
     async def start(self, user_id: int, phone: str) -> None:
         settings = get_settings()
@@ -60,7 +61,7 @@ class AuthFlowManager:
         self._flows[user_id] = AuthFlow(phone=None, client=client, mode="qr", qr_login=qr_login)
         return qr_login.url
 
-    async def submit_code(self, user_id: int, code: str) -> str | None:
+    async def submit_code(self, user_id: int, code: str) -> Optional[str]:
         flow = self._flows.get(user_id)
         if not flow:
             return None
@@ -75,7 +76,7 @@ class AuthFlowManager:
         self._flows.pop(user_id, None)
         return session_string
 
-    async def submit_password(self, user_id: int, password: str) -> str | None:
+    async def submit_password(self, user_id: int, password: str) -> Optional[str]:
         flow = self._flows.get(user_id)
         if not flow:
             return None
@@ -88,7 +89,7 @@ class AuthFlowManager:
         self._flows.pop(user_id, None)
         return session_string
 
-    async def confirm_qr(self, user_id: int, timeout: int = 60) -> tuple[str | None, str | None]:
+    async def confirm_qr(self, user_id: int, timeout: int = 60) -> Tuple[Optional[str], Optional[str]]:
         flow = self._flows.get(user_id)
         if not flow or flow.mode != "qr" or not flow.qr_login:
             return None, None
@@ -103,7 +104,7 @@ class AuthFlowManager:
         phone = getattr(me, "phone", None)
         return session_string, phone
 
-    def submit_web(self, token: str, code: str | None, password: str | None) -> bool:
+    def submit_web(self, token: str, code: Optional[str], password: Optional[str]) -> bool:
         user_id = self._token_index.get(token)
         if not user_id:
             return False
@@ -116,7 +117,7 @@ class AuthFlowManager:
             flow.password = password.strip()
         return True
 
-    async def confirm_web(self, user_id: int) -> tuple[str | None, str | None, str]:
+    async def confirm_web(self, user_id: int) -> Tuple[Optional[str], Optional[str], str]:
         flow = self._flows.get(user_id)
         if not flow or flow.mode != "web":
             return None, None, "FAILED"

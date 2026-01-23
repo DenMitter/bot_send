@@ -4,7 +4,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from aiogram.exceptions import TelegramBadRequest
 from sqlalchemy import select
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Set
 
 from app.bot.history import (
     clear_history,
@@ -37,7 +37,7 @@ from app.bot.manuals import clear_manual_media, load_manual_page, render_manual_
 router = Router()
 
 
-def _first_media_path(media_paths: Sequence[str] | None) -> Optional[str]:
+def _first_media_path(media_paths: Optional[Sequence[str]]) -> Optional[str]:
     if not media_paths:
         return None
     return next((path for path in media_paths if path), None)
@@ -77,7 +77,7 @@ async def _send_welcome_menu(message: Message, locale: str) -> None:
     register_message(sent)
 
 
-def _button_texts(key: str) -> set[str]:
+def _button_texts(key: str) -> Set[str]:
     return {t(key, "uk"), t(key, "ru")}
 
 

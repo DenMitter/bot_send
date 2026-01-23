@@ -1,10 +1,12 @@
+from typing import Optional
+
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import get_settings
 
 
 _engine = None
-_session_factory: async_sessionmaker[AsyncSession] | None = None
+_session_factory: Optional[async_sessionmaker] = None
 
 
 def get_engine():

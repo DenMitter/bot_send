@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Dict
+
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
@@ -9,7 +11,7 @@ from app.db.models import Account
 
 class TelethonManager:
     def __init__(self) -> None:
-        self._clients: dict[int, TelegramClient] = {}
+        self._clients: Dict[int, TelegramClient] = {}
 
     async def get_client(self, account: Account) -> TelegramClient:
         if account.id in self._clients:

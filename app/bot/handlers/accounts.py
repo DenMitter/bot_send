@@ -51,6 +51,8 @@ class AccountStates(StatesGroup):
     id_action = State()
     qr_wait = State()
     web_wait = State()
+    session_phone = State()
+    session_string = State()
 
 
 @router.message(Command("account_add"))
@@ -202,6 +204,58 @@ async def account_password(message: Message, state: FSMContext) -> None:
             await session.commit()
         else:
             await service.add_account(message.from_user.id, phone, result)
+    await message.answer(t("account_added", locale))
+    await state.clear()
+
+
+@router.message(Command("account_session"))
+async def account_session(message: Message, state: FSMContext) -> None:
+    if not is_admin(message):
+        return
+    locale = await resolve_locale(message.from_user.id, message.from_user.language_code)
+    await state.clear()
+    await message.answer("Надішліть номер телефону (+380...) для додавання session_string.")
+    await state.set_state(AccountStates.session_phone)
+
+
+@router.message(AccountStates.session_phone)
+async def account_session_phone(message: Message, state: FSMContext) -> None:
+    locale = await resolve_locale(message.from_user.id, message.from_user.language_code)
+    phone = (message.text or "").strip()
+    if not phone.startswith("+"):
+        await message.answer(t("account_phone", locale))
+        return
+    await state.update_data(session_phone=phone)
+    await message.answer("Вставте рядок session_string (з Telethon Client).", reply_markup=back_to_menu_keyboard(locale))
+    await state.set_state(AccountStates.session_string)
+
+
+@router.message(AccountStates.session_string)
+async def account_session_string(message: Message, state: FSMContext) -> None:
+    locale = await resolve_locale(message.from_user.id, message.from_user.language_code)
+    session_string = (message.text or "").strip()
+    if not session_string:
+        await message.answer("Рядок session_string не може бути порожнім.")
+        return
+    data = await state.get_data()
+    phone = data.get("session_phone")
+    if not phone:
+        await message.answer("Не вдалося прочитати номер, спробуйте спочатку /account_session.")
+        await state.clear()
+        return
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        service = AccountService(session)
+        existing = await service.get_by_phone(phone)
+        if existing and existing.owner_id != message.from_user.id:
+            await message.answer(t("account_taken", locale))
+            await state.clear()
+            return
+        if existing:
+            existing.session_string = session_string
+            await session.commit()
+        else:
+            await service.add_account(message.from_user.id, phone, session_string)
     await message.answer(t("account_added", locale))
     await state.clear()
 

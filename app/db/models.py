@@ -3,6 +3,8 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
+from typing import List, Optional
+
 from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -49,7 +51,7 @@ class Account(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    mailings: Mapped[list[Mailing]] = relationship(back_populates="account")
+    mailings: Mapped[List["Mailing"]] = relationship(back_populates="account")
 
 
 class BotSubscriber(Base):
@@ -57,10 +59,10 @@ class BotSubscriber(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(BigInteger, unique=True)
-    username: Mapped[str | None] = mapped_column(String(64))
-    first_name: Mapped[str | None] = mapped_column(String(64))
-    last_name: Mapped[str | None] = mapped_column(String(64))
-    language: Mapped[str | None] = mapped_column(String(8))
+    username: Mapped[Optional[str]] = mapped_column(String(64))
+    first_name: Mapped[Optional[str]] = mapped_column(String(64))
+    last_name: Mapped[Optional[str]] = mapped_column(String(64))
+    language: Mapped[Optional[str]] = mapped_column(String(8))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -71,11 +73,11 @@ class ParsedUser(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     owner_id: Mapped[int] = mapped_column(BigInteger, index=True)
     user_id: Mapped[int] = mapped_column(BigInteger)
-    username: Mapped[str | None] = mapped_column(String(64))
-    first_name: Mapped[str | None] = mapped_column(String(64))
-    last_name: Mapped[str | None] = mapped_column(String(64))
-    access_hash: Mapped[int | None] = mapped_column(BigInteger)
-    source: Mapped[str | None] = mapped_column(String(128))
+    username: Mapped[Optional[str]] = mapped_column(String(64))
+    first_name: Mapped[Optional[str]] = mapped_column(String(64))
+    last_name: Mapped[Optional[str]] = mapped_column(String(64))
+    access_hash: Mapped[Optional[int]] = mapped_column(BigInteger)
+    source: Mapped[Optional[str]] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -86,10 +88,10 @@ class ParsedChat(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     owner_id: Mapped[int] = mapped_column(BigInteger, index=True)
     chat_id: Mapped[int] = mapped_column(BigInteger)
-    title: Mapped[str | None] = mapped_column(String(255))
-    username: Mapped[str | None] = mapped_column(String(64))
-    chat_type: Mapped[str | None] = mapped_column(String(32))
-    access_hash: Mapped[int | None] = mapped_column(BigInteger)
+    title: Mapped[Optional[str]] = mapped_column(String(255))
+    username: Mapped[Optional[str]] = mapped_column(String(64))
+    chat_type: Mapped[Optional[str]] = mapped_column(String(32))
+    access_hash: Mapped[Optional[int]] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -98,16 +100,16 @@ class Mailing(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     owner_id: Mapped[int] = mapped_column(BigInteger, index=True)
-    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"))
-    chat_id: Mapped[int | None] = mapped_column(BigInteger)
+    account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("accounts.id"))
+    chat_id: Mapped[Optional[int]] = mapped_column(BigInteger)
 
     status: Mapped[MailingStatus] = mapped_column(Enum(MailingStatus), default=MailingStatus.pending)
     message_type: Mapped[MessageType] = mapped_column(Enum(MessageType))
-    text: Mapped[str | None] = mapped_column(Text)
-    media_path: Mapped[str | None] = mapped_column(String(512))
-    media_file_id: Mapped[str | None] = mapped_column(String(512))
-    sticker_set_name: Mapped[str | None] = mapped_column(String(255))
-    sticker_set_index: Mapped[int | None] = mapped_column(Integer)
+    text: Mapped[Optional[str]] = mapped_column(Text)
+    media_path: Mapped[Optional[str]] = mapped_column(String(512))
+    media_file_id: Mapped[Optional[str]] = mapped_column(String(512))
+    sticker_set_name: Mapped[Optional[str]] = mapped_column(String(255))
+    sticker_set_index: Mapped[Optional[int]] = mapped_column(Integer)
     mention: Mapped[bool] = mapped_column(Boolean, default=False)
 
     target_source: Mapped[TargetSource] = mapped_column(Enum(TargetSource))
@@ -117,8 +119,8 @@ class Mailing(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    account: Mapped[Account | None] = relationship(back_populates="mailings")
-    recipients: Mapped[list[MailingRecipient]] = relationship(back_populates="mailing")
+    account: Mapped[Optional[Account]] = relationship(back_populates="mailings")
+    recipients: Mapped[List["MailingRecipient"]] = relationship(back_populates="mailing")
 
 
 class MailingRecipient(Base):
@@ -127,11 +129,11 @@ class MailingRecipient(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     mailing_id: Mapped[int] = mapped_column(ForeignKey("mailings.id"))
     user_id: Mapped[int] = mapped_column(BigInteger)
-    username: Mapped[str | None] = mapped_column(String(64))
-    access_hash: Mapped[int | None] = mapped_column(BigInteger)
+    username: Mapped[Optional[str]] = mapped_column(String(64))
+    access_hash: Mapped[Optional[int]] = mapped_column(BigInteger)
 
     status: Mapped[RecipientStatus] = mapped_column(Enum(RecipientStatus), default=RecipientStatus.pending)
-    sent_at: Mapped[datetime | None] = mapped_column(DateTime)
-    error: Mapped[str | None] = mapped_column(Text)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    error: Mapped[Optional[str]] = mapped_column(Text)
 
     mailing: Mapped[Mailing] = relationship(back_populates="recipients")

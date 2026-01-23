@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from typing import Optional, Union
 
 from app.core.config import get_settings
 
@@ -15,7 +16,7 @@ def get_mailing_log_path(mailing_id: int) -> Path:
     return _logs_dir() / f"mailing_{mailing_id}.txt"
 
 
-def append_recipient_log(mailing_id: int, user_id: int | str, username: str | None, error: str) -> None:
+def append_recipient_log(mailing_id: int, user_id: Union[int, str], username: Optional[str], error: str) -> None:
     path = get_mailing_log_path(mailing_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.utcnow().isoformat()

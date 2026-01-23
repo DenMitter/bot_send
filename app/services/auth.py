@@ -1,3 +1,5 @@
+from typing import List, Optional
+
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,13 +10,13 @@ class AccountService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def get_active_account(self, owner_id: int) -> Account | None:
+    async def get_active_account(self, owner_id: int) -> Optional[Account]:
         result = await self._session.execute(
             select(Account).where(Account.owner_id == owner_id, Account.is_active == True)
         )
         return result.scalars().first()
 
-    async def get_by_phone(self, phone: str) -> Account | None:
+    async def get_by_phone(self, phone: str) -> Optional[Account]:
         result = await self._session.execute(select(Account).where(Account.phone == phone))
         return result.scalars().first()
 
@@ -25,7 +27,7 @@ class AccountService:
         await self._session.refresh(account)
         return account
 
-    async def list_accounts(self, owner_id: int) -> list[Account]:
+    async def list_accounts(self, owner_id: int) -> List[Account]:
         result = await self._session.execute(select(Account).where(Account.owner_id == owner_id))
         return result.scalars().all()
 

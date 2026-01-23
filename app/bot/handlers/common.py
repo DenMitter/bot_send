@@ -1,3 +1,5 @@
+from typing import Optional
+
 from aiogram.types import Message
 from sqlalchemy import select
 
@@ -19,7 +21,7 @@ def get_locale(message: Message) -> str:
     return settings.default_locale
 
 
-def normalize_locale(value: str | None) -> str:
+def normalize_locale(value: Optional[str]) -> str:
     if not value:
         return get_settings().default_locale
     value = value.lower()
@@ -28,7 +30,7 @@ def normalize_locale(value: str | None) -> str:
     return get_settings().default_locale
 
 
-async def resolve_locale(user_id: int, fallback: str | None = None) -> str:
+async def resolve_locale(user_id: int, fallback: Optional[str] = None) -> str:
     session_factory = get_session_factory()
     async with session_factory() as session:
         result = await session.execute(select(BotSubscriber).where(BotSubscriber.user_id == user_id))

@@ -60,6 +60,14 @@ python -m app.main
 Use bot command `/account_add`.
 You can log in with QR or via a web page (code/password are not sent in Telegram).
 
+## Console session file
+
+If you need to create a Telegram `.session` file without the bot UI, run the helper script after configuring `.env`:
+```
+python scripts/generate_session_file.py --phone +380501234567
+```
+The script writes the file to `storage/sessions` by default, accepts `--session-dir` to override the folder, `--force` to overwrite an existing file, and `--print-string` to echo the StringSession representation when you later add accounts manually.
+
 ## Admin commands
 
 - `/admin`

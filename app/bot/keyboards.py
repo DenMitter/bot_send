@@ -1,11 +1,12 @@
 ﻿from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+from typing import Dict
 
 from app.i18n.translator import t
 
 
 WELCOME_PAGE_COUNT = 10
 
-BUTTON_ICONS: dict[str, str] = {
+BUTTON_ICONS: Dict[str, str] = {
     "btn_welcome_mailing": "🚀",
     "btn_welcome_parsing": "🧠",
     "btn_parsed_users_db": "🗂️",
@@ -49,6 +50,7 @@ def welcome_keyboard(locale: str) -> ReplyKeyboardMarkup:
             [KeyboardButton(text=_button_label("btn_welcome_parsing", locale))],
             [KeyboardButton(text=_button_label("btn_parsed_users_db", locale))],
             [KeyboardButton(text=_button_label("btn_welcome_tasks", locale))],
+            [KeyboardButton(text=_button_label("btn_welcome_manuals", locale))],
             [
                 KeyboardButton(text=_button_label("btn_welcome_profile", locale)),
                 KeyboardButton(text=_button_label("btn_welcome_accounts", locale)),
@@ -65,9 +67,9 @@ def welcome_keyboard(locale: str) -> ReplyKeyboardMarkup:
 def welcome_entry_keyboard(locale: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            # [
-            #     InlineKeyboardButton(text=t("btn_manual_guide", locale), callback_data="welcome:manual"),
-            # ]
+            [
+                InlineKeyboardButton(text=_button_label("btn_welcome_manuals", locale), callback_data="welcome:manual"),
+            ]
         ]
     )
 

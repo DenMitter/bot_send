@@ -1,8 +1,8 @@
 ﻿from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
@@ -30,7 +30,7 @@ def _locale_dir(locale: str) -> Path:
     return BASE_DIR / DEFAULT_LOCALE
 
 
-def load_manual_page(locale: str, page: int) -> tuple[str, list[str]]:
+def load_manual_page(locale: str, page: int) -> Tuple[str, List[str]]:
     page = max(1, min(page, WELCOME_PAGE_COUNT))
     manual_dir = _locale_dir(locale)
     page_file = manual_dir / f"page_{page}.md"
@@ -39,7 +39,7 @@ def load_manual_page(locale: str, page: int) -> tuple[str, list[str]]:
     text = page_file.read_text(encoding="utf-8").strip()
 
     media_file = manual_dir / f"page_{page}.media"
-    media_paths: list[str] = []
+    media_paths: List[str] = []
     if media_file.exists():
         for raw_line in media_file.read_text(encoding="utf-8").splitlines():
             line = raw_line.strip()
@@ -82,9 +82,9 @@ async def _send_manual_message(
     chat_id: int,
     text: str,
     media_path: Optional[str],
-    reply_markup: InlineKeyboardMarkup | None,
-    parse_mode: str | None = "Markdown",
-) -> tuple[Message, bool]:
+    reply_markup: Optional[InlineKeyboardMarkup],
+    parse_mode: Optional[str] = "Markdown",
+) -> Tuple[Message, bool]:
     if media_path:
         photo_source = FSInputFile(media_path) if not media_path.startswith("http") else media_path
         sent = await bot.send_photo(chat_id, photo_source, caption=text, parse_mode=parse_mode, reply_markup=reply_markup)
@@ -99,8 +99,8 @@ async def render_manual_message(
     chat_id: int,
     text: str,
     media_path: Optional[str],
-    reply_markup: InlineKeyboardMarkup | None,
-    parse_mode: str | None = "Markdown",
+    reply_markup: Optional[InlineKeyboardMarkup],
+    parse_mode: Optional[str] = "Markdown",
 ) -> Message:
     session = get_manual_session(chat_id)
     is_photo = bool(media_path)
