@@ -119,7 +119,7 @@ class Mailing(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     account: Mapped[Optional[Account]] = relationship(back_populates="mailings")
-    recipients: Mapped[list[MailingRecipient]] = relationship(back_populates="mailing")
+    recipients: Mapped[List["MailingRecipient"]] = relationship(back_populates="mailing")
 
 
 class MailingRecipient(Base):
