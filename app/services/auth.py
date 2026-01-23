@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 from typing import List, Optional
+=======
+from typing import Optional
+>>>>>>> 9dd19731839bc17800be4d7e8cd1e3ac8fafa344
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession

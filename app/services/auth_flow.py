@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+<<<<<<< HEAD
 from typing import Dict, Optional, Tuple
+=======
+from typing import Optional, Tuple
+>>>>>>> 9dd19731839bc17800be4d7e8cd1e3ac8fafa344
 from uuid import uuid4
 
 from telethon import TelegramClient
@@ -21,6 +25,9 @@ class AuthFlow:
     code: Optional[str] = None
     password: Optional[str] = None
     needs_password: bool = False
+    code_type: Optional[object] = None
+    next_code_type: Optional[object] = None
+    code_timeout: Optional[int] = None
 
 
 class AuthFlowManager:
@@ -33,23 +40,38 @@ class AuthFlowManager:
         client = TelegramClient(StringSession(), settings.api_id, settings.api_hash)
         await client.connect()
         try:
-            await client.send_code_request(phone)
+            sent_code = await client.send_code_request(phone)
         except Exception:
             await client.disconnect()
             raise
-        self._flows[user_id] = AuthFlow(phone=phone, client=client, mode="code")
+        self._flows[user_id] = AuthFlow(
+            phone=phone,
+            client=client,
+            mode="code",
+            code_type=getattr(sent_code, "type", None),
+            next_code_type=getattr(sent_code, "next_type", None),
+            code_timeout=getattr(sent_code, "timeout", None),
+        )
 
     async def start_web(self, user_id: int, phone: str) -> str:
         settings = get_settings()
         client = TelegramClient(StringSession(), settings.api_id, settings.api_hash)
         await client.connect()
         try:
-            await client.send_code_request(phone)
+            sent_code = await client.send_code_request(phone)
         except Exception:
             await client.disconnect()
             raise
         token = uuid4().hex
-        self._flows[user_id] = AuthFlow(phone=phone, client=client, mode="web", web_token=token)
+        self._flows[user_id] = AuthFlow(
+            phone=phone,
+            client=client,
+            mode="web",
+            web_token=token,
+            code_type=getattr(sent_code, "type", None),
+            next_code_type=getattr(sent_code, "next_type", None),
+            code_timeout=getattr(sent_code, "timeout", None),
+        )
         self._token_index[token] = user_id
         return token
 
@@ -61,6 +83,15 @@ class AuthFlowManager:
         self._flows[user_id] = AuthFlow(phone=None, client=client, mode="qr", qr_login=qr_login)
         return qr_login.url
 
+<<<<<<< HEAD
+=======
+    def get_delivery_info(self, user_id: int) -> Tuple[Optional[object], Optional[object], Optional[int]]:
+        flow = self._flows.get(user_id)
+        if not flow:
+            return None, None, None
+        return flow.code_type, flow.next_code_type, flow.code_timeout
+
+>>>>>>> 9dd19731839bc17800be4d7e8cd1e3ac8fafa344
     async def submit_code(self, user_id: int, code: str) -> Optional[str]:
         flow = self._flows.get(user_id)
         if not flow:
@@ -89,7 +120,11 @@ class AuthFlowManager:
         self._flows.pop(user_id, None)
         return session_string
 
+<<<<<<< HEAD
     async def confirm_qr(self, user_id: int, timeout: int = 60) -> Tuple[Optional[str], Optional[str]]:
+=======
+    async def confirm_qr(self, user_id: int, timeout: int = 60) -> tuple[Optional[str], Optional[str]]:
+>>>>>>> 9dd19731839bc17800be4d7e8cd1e3ac8fafa344
         flow = self._flows.get(user_id)
         if not flow or flow.mode != "qr" or not flow.qr_login:
             return None, None
@@ -117,7 +152,11 @@ class AuthFlowManager:
             flow.password = password.strip()
         return True
 
+<<<<<<< HEAD
     async def confirm_web(self, user_id: int) -> Tuple[Optional[str], Optional[str], str]:
+=======
+    async def confirm_web(self, user_id: int) -> tuple[Optional[str], Optional[str], str]:
+>>>>>>> 9dd19731839bc17800be4d7e8cd1e3ac8fafa344
         flow = self._flows.get(user_id)
         if not flow or flow.mode != "web":
             return None, None, "FAILED"

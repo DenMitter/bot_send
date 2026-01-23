@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
+from typing import Optional
 
 from typing import List, Optional
 
@@ -120,7 +121,11 @@ class Mailing(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     account: Mapped[Optional[Account]] = relationship(back_populates="mailings")
+<<<<<<< HEAD
     recipients: Mapped[List["MailingRecipient"]] = relationship(back_populates="mailing")
+=======
+    recipients: Mapped[list[MailingRecipient]] = relationship(back_populates="mailing")
+>>>>>>> 9dd19731839bc17800be4d7e8cd1e3ac8fafa344
 
 
 class MailingRecipient(Base):

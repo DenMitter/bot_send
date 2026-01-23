@@ -1,0 +1,46 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDEs and editors
+.idea/
+.vscode/
+
+# Virtual environments
+venv/
+.venv/
+
+# Environment variables
+.env
+.env.*
+
+# Python packaging
+*.egg-info/
+dist/
+build/
+
+# Logs and caches
+.pytest_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+*.log
+
+# Media / storage
+storage/
+storage/sessions/
+
+# Scripts caches
+scripts/__pycache__/
+
+# App caches
+app/**/__pycache__/
+app/bot/__pycache__/
+app/i18n/locales/__pycache__/
+app/services/**/__pycache__/
+app/core/__pycache__/
+app/db/__pycache__/
+
+# SQL
+*.sqlite3
+*.db

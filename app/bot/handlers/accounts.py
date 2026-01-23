@@ -7,6 +7,13 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 import qrcode
+from telethon.errors.rpcerrorlist import (
+    PhoneNumberBannedError,
+    PhoneNumberFloodError,
+    PhoneNumberInvalidError,
+    PhoneNumberUnoccupiedError,
+)
+from telethon.utils import parse_phone
 
 from app.bot.history import edit_with_history
 from app.bot.handlers.common import is_admin, resolve_locale
@@ -53,6 +60,21 @@ class AccountStates(StatesGroup):
     web_wait = State()
     session_phone = State()
     session_string = State()
+
+
+def _sent_code_method_name(code_type: object, locale: str) -> str:
+    if not code_type:
+        return t("account_code_method_unknown", locale)
+    name = type(code_type).__name__
+    mapping = {
+        "SentCodeTypeApp": "account_code_method_app",
+        "SentCodeTypeSms": "account_code_method_sms",
+        "SentCodeTypeCall": "account_code_method_call",
+        "SentCodeTypeFlashCall": "account_code_method_flash_call",
+        "SentCodeTypeMissedCall": "account_code_method_missed_call",
+        "SentCodeTypeEmailCode": "account_code_method_email",
+    }
+    return t(mapping.get(name, "account_code_method_unknown"), locale)
 
 
 @router.message(Command("account_add"))
@@ -118,10 +140,12 @@ async def account_method_qr(callback: CallbackQuery, state: FSMContext) -> None:
 @router.message(AccountStates.phone)
 async def account_phone(message: Message, state: FSMContext) -> None:
     locale = await resolve_locale(message.from_user.id, message.from_user.language_code)
-    phone = (message.text or "").strip()
-    if not phone.startswith("+"):
-        await message.answer(t("account_phone", locale))
+    raw_phone = (message.text or "").strip()
+    parsed_phone = parse_phone(raw_phone)
+    if not parsed_phone:
+        await message.answer(t("account_phone_invalid", locale))
         return
+    phone = f"+{parsed_phone}"
     data = await state.get_data()
     method = data.get("auth_method") or "code"
     try:
@@ -130,11 +154,36 @@ async def account_phone(message: Message, state: FSMContext) -> None:
         else:
             await auth_flow_manager.start(message.from_user.id, phone)
             token = None
+    except PhoneNumberInvalidError:
+        await message.answer(t("account_phone_invalid", locale))
+        await state.clear()
+        return
+    except PhoneNumberBannedError:
+        await message.answer(t("account_phone_banned", locale))
+        await state.clear()
+        return
+    except PhoneNumberFloodError:
+        await message.answer(t("account_phone_flood", locale))
+        await state.clear()
+        return
+    except PhoneNumberUnoccupiedError:
+        await message.answer(t("account_phone_unoccupied", locale))
+        await state.clear()
+        return
     except Exception:
         await message.answer(t("account_failed", locale))
         await state.clear()
         return
     await state.update_data(phone=phone)
+    code_type, next_code_type, timeout = auth_flow_manager.get_delivery_info(message.from_user.id)
+    if code_type:
+        method_name = _sent_code_method_name(code_type, locale)
+        await message.answer(t("account_code_delivery", locale).format(method=method_name))
+        if next_code_type and timeout:
+            next_name = _sent_code_method_name(next_code_type, locale)
+            await message.answer(
+                t("account_code_delivery_next", locale).format(method=next_name, timeout=timeout)
+            )
     if method == "web":
         settings = get_settings()
         link = f"{settings.web_auth_base_url}/auth/{token}"

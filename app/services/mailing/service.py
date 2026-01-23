@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
+<<<<<<< HEAD
 from typing import Dict, List, Optional
+=======
+from typing import Optional
+>>>>>>> 9dd19731839bc17800be4d7e8cd1e3ac8fafa344
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,7 +33,11 @@ class MailingService:
         owner_id: int,
         account_id: Optional[int],
         chat_id: Optional[int],
+<<<<<<< HEAD
         target_ids: Optional[List[int]],
+=======
+        target_ids: Optional[list[int]],
+>>>>>>> 9dd19731839bc17800be4d7e8cd1e3ac8fafa344
         target_source: TargetSource,
         message_type: MessageType,
         text: Optional[str],

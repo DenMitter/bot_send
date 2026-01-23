@@ -68,7 +68,11 @@ def welcome_entry_keyboard(locale: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
+<<<<<<< HEAD
                 InlineKeyboardButton(text=_button_label("btn_welcome_manuals", locale), callback_data="welcome:manual"),
+=======
+                InlineKeyboardButton(text=t("btn_manual_guide", locale), callback_data="welcome:manual"),
+>>>>>>> 9dd19731839bc17800be4d7e8cd1e3ac8fafa344
             ]
         ]
     )

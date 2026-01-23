@@ -84,7 +84,11 @@ async def _send_manual_message(
     media_path: Optional[str],
     reply_markup: Optional[InlineKeyboardMarkup],
     parse_mode: Optional[str] = "Markdown",
+<<<<<<< HEAD
 ) -> Tuple[Message, bool]:
+=======
+) -> tuple[Message, bool]:
+>>>>>>> 9dd19731839bc17800be4d7e8cd1e3ac8fafa344
     if media_path:
         photo_source = FSInputFile(media_path) if not media_path.startswith("http") else media_path
         sent = await bot.send_photo(chat_id, photo_source, caption=text, parse_mode=parse_mode, reply_markup=reply_markup)

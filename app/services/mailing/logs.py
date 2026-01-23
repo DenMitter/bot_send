@@ -16,7 +16,16 @@ def get_mailing_log_path(mailing_id: int) -> Path:
     return _logs_dir() / f"mailing_{mailing_id}.txt"
 
 
+<<<<<<< HEAD
 def append_recipient_log(mailing_id: int, user_id: Union[int, str], username: Optional[str], error: str) -> None:
+=======
+def append_recipient_log(
+    mailing_id: int,
+    user_id: Union[int, str],
+    username: Optional[str],
+    error: str,
+) -> None:
+>>>>>>> 9dd19731839bc17800be4d7e8cd1e3ac8fafa344
     path = get_mailing_log_path(mailing_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.utcnow().isoformat()
