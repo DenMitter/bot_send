@@ -23,6 +23,7 @@ from app.bot.keyboards import (
     account_list_keyboard,
     account_qr_confirm_keyboard,
     account_web_confirm_keyboard,
+    add_account_keyboard,
     back_to_menu_keyboard,
     admin_menu_keyboard,
 )
@@ -222,8 +223,10 @@ async def account_code(message: Message, state: FSMContext) -> None:
         if existing:
             existing.session_string = result
             await session.commit()
+            await service.set_active(message.from_user.id, existing.id, True)
         else:
-            await service.add_account(message.from_user.id, phone, result)
+            account = await service.add_account(message.from_user.id, phone, result)
+            await service.set_active(message.from_user.id, account.id, True)
     await message.answer(t("account_added", locale))
     await state.clear()
 
@@ -251,8 +254,10 @@ async def account_password(message: Message, state: FSMContext) -> None:
         if existing:
             existing.session_string = result
             await session.commit()
+            await service.set_active(message.from_user.id, existing.id, True)
         else:
-            await service.add_account(message.from_user.id, phone, result)
+            account = await service.add_account(message.from_user.id, phone, result)
+            await service.set_active(message.from_user.id, account.id, True)
     await message.answer(t("account_added", locale))
     await state.clear()
 
@@ -303,8 +308,10 @@ async def account_session_string(message: Message, state: FSMContext) -> None:
         if existing:
             existing.session_string = session_string
             await session.commit()
+            await service.set_active(message.from_user.id, existing.id, True)
         else:
-            await service.add_account(message.from_user.id, phone, session_string)
+            account = await service.add_account(message.from_user.id, phone, session_string)
+            await service.set_active(message.from_user.id, account.id, True)
     await message.answer(t("account_added", locale))
     await state.clear()
 
@@ -330,8 +337,10 @@ async def account_qr_wait(callback: CallbackQuery, state: FSMContext) -> None:
         if existing:
             existing.session_string = session_string
             await session.commit()
+            await service.set_active(callback.from_user.id, existing.id, True)
         else:
-            await service.add_account(callback.from_user.id, phone, session_string)
+            account = await service.add_account(callback.from_user.id, phone, session_string)
+            await service.set_active(callback.from_user.id, account.id, True)
     await _reply_with_history(callback.message, t("account_added", locale))
     await state.clear()
     try:
@@ -374,8 +383,10 @@ async def account_web_wait(callback: CallbackQuery, state: FSMContext) -> None:
         if existing:
             existing.session_string = session_string
             await session.commit()
+            await service.set_active(callback.from_user.id, existing.id, True)
         else:
-            await service.add_account(callback.from_user.id, phone, session_string)
+            account = await service.add_account(callback.from_user.id, phone, session_string)
+            await service.set_active(callback.from_user.id, account.id, True)
     await edit_with_history(callback.message, t("account_web_ok", locale))
     await state.clear()
     await _safe_callback_answer(callback)
@@ -389,7 +400,7 @@ async def account_list(message: Message) -> None:
         accounts = await AccountService(session).list_accounts(message.from_user.id)
 
     if not accounts:
-        await message.answer(t("account_none", locale))
+        await message.answer(t("account_none", locale), reply_markup=add_account_keyboard(locale))
         return
 
     await message.answer(
@@ -406,7 +417,11 @@ async def account_list_cb(callback: CallbackQuery) -> None:
         accounts = await AccountService(session).list_accounts(callback.from_user.id)
 
     if not accounts:
-        await edit_with_history(callback.message, t("account_none", locale), reply_markup=back_to_menu_keyboard(locale))
+        await edit_with_history(
+            callback.message,
+            t("account_none", locale),
+            reply_markup=add_account_keyboard(locale, back_callback="back:prev"),
+        )
         await _safe_callback_answer(callback)
         return
 

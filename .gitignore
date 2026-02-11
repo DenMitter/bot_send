@@ -6,25 +6,45 @@ __pycache__/
 .idea/
 .vscode/
 
+# OS
+.DS_Store
+
 # Virtual environments
 venv/
 .venv/
 
-# Environment variables
+# Environment variables (keep examples)
 .env
 .env.*
+!.env.example
+!.env.sample
 
 # Python packaging
 *.egg-info/
 dist/
 build/
 
-# Logs and caches
+# Python tooling caches
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
+.pyright/
 .coverage
 coverage.xml
 *.log
+
+# Node/Vite
+node_modules/
+**/node_modules/
+dist/
+build/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
 
 # Media / storage
 storage/

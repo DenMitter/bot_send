@@ -15,20 +15,18 @@ def _logs_dir() -> Path:
 def get_mailing_log_path(mailing_id: int) -> Path:
     return _logs_dir() / f"mailing_{mailing_id}.txt"
 
-
-<<<<<<< HEAD
-def append_recipient_log(mailing_id: int, user_id: Union[int, str], username: Optional[str], error: str) -> None:
-=======
 def append_recipient_log(
     mailing_id: int,
     user_id: Union[int, str],
     username: Optional[str],
     error: str,
 ) -> None:
->>>>>>> 9dd19731839bc17800be4d7e8cd1e3ac8fafa344
     path = get_mailing_log_path(mailing_id)
     path.parent.mkdir(parents=True, exist_ok=True)
+    is_new = not path.exists()
     timestamp = datetime.utcnow().isoformat()
-    line = f"[{timestamp}] recipient={user_id} username={username or '-'} error={error}\n"
+    line = f"[{timestamp}] mailing={mailing_id} recipient={user_id} username={username or '-'} error={error}\n"
     with path.open("a", encoding="utf-8") as stream:
+        if is_new:
+            stream.write(f"Mailing log #{mailing_id} started at {timestamp}\n")
         stream.write(line)

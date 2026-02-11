@@ -2,12 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
-<<<<<<< HEAD
 from typing import Dict, List, Optional
-=======
-from typing import Optional
->>>>>>> 9dd19731839bc17800be4d7e8cd1e3ac8fafa344
-
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,11 +28,7 @@ class MailingService:
         owner_id: int,
         account_id: Optional[int],
         chat_id: Optional[int],
-<<<<<<< HEAD
         target_ids: Optional[List[int]],
-=======
-        target_ids: Optional[list[int]],
->>>>>>> 9dd19731839bc17800be4d7e8cd1e3ac8fafa344
         target_source: TargetSource,
         message_type: MessageType,
         text: Optional[str],
@@ -48,6 +39,8 @@ class MailingService:
         mention: bool,
         delay_seconds: float,
         limit_count: int,
+        repeat_delay_seconds: float,
+        repeat_count: int,
     ) -> Mailing:
         mailing = Mailing(
             owner_id=owner_id,
@@ -64,6 +57,8 @@ class MailingService:
             target_source=target_source,
             delay_seconds=delay_seconds,
             limit_count=limit_count,
+            repeat_delay_seconds=repeat_delay_seconds,
+            repeat_count=repeat_count,
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
         )
@@ -141,6 +136,8 @@ class MailingService:
             target_source=mailing.target_source,
             delay_seconds=mailing.delay_seconds,
             limit_count=mailing.limit_count,
+            repeat_delay_seconds=mailing.repeat_delay_seconds,
+            repeat_count=mailing.repeat_count,
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
         )
@@ -218,14 +215,44 @@ class MailingService:
         count = 0
 
         if hasattr(mailing, "_target_ids") and mailing._target_ids:
-            for target_id in mailing._target_ids:
+            target_ids = list(mailing._target_ids)
+            ids_set = set(target_ids)
+            resolved = {}
+
+            if mailing.target_source == TargetSource.chats:
+                result = await self._session.execute(
+                    select(ParsedChat).where(
+                        ParsedChat.owner_id == mailing.owner_id,
+                        ParsedChat.chat_id.in_(ids_set),
+                    )
+                )
+                for chat in result.scalars().all():
+                    resolved[chat.chat_id] = chat
+            elif mailing.target_source == TargetSource.parsed:
+                result = await self._session.execute(
+                    select(ParsedUser).where(
+                        ParsedUser.owner_id == mailing.owner_id,
+                        ParsedUser.user_id.in_(ids_set),
+                    )
+                )
+                for user in result.scalars().all():
+                    resolved[user.user_id] = user
+            elif mailing.target_source == TargetSource.subscribers:
+                result = await self._session.execute(
+                    select(BotSubscriber).where(BotSubscriber.user_id.in_(ids_set))
+                )
+                for user in result.scalars().all():
+                    resolved[user.user_id] = user
+
+            for target_id in target_ids:
                 if limit and count >= limit:
                     break
+                entity = resolved.get(target_id)
                 recipient = MailingRecipient(
                     mailing_id=mailing.id,
                     user_id=target_id,
-                    username=None,
-                    access_hash=None,
+                    username=getattr(entity, "username", None),
+                    access_hash=getattr(entity, "access_hash", None),
                 )
                 self._session.add(recipient)
                 count += 1

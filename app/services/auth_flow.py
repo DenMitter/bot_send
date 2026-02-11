@@ -1,11 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-<<<<<<< HEAD
 from typing import Dict, Optional, Tuple
-=======
-from typing import Optional, Tuple
->>>>>>> 9dd19731839bc17800be4d7e8cd1e3ac8fafa344
 from uuid import uuid4
 
 from telethon import TelegramClient
@@ -83,15 +79,12 @@ class AuthFlowManager:
         self._flows[user_id] = AuthFlow(phone=None, client=client, mode="qr", qr_login=qr_login)
         return qr_login.url
 
-<<<<<<< HEAD
-=======
     def get_delivery_info(self, user_id: int) -> Tuple[Optional[object], Optional[object], Optional[int]]:
         flow = self._flows.get(user_id)
         if not flow:
             return None, None, None
         return flow.code_type, flow.next_code_type, flow.code_timeout
 
->>>>>>> 9dd19731839bc17800be4d7e8cd1e3ac8fafa344
     async def submit_code(self, user_id: int, code: str) -> Optional[str]:
         flow = self._flows.get(user_id)
         if not flow:
@@ -120,11 +113,7 @@ class AuthFlowManager:
         self._flows.pop(user_id, None)
         return session_string
 
-<<<<<<< HEAD
     async def confirm_qr(self, user_id: int, timeout: int = 60) -> Tuple[Optional[str], Optional[str]]:
-=======
-    async def confirm_qr(self, user_id: int, timeout: int = 60) -> tuple[Optional[str], Optional[str]]:
->>>>>>> 9dd19731839bc17800be4d7e8cd1e3ac8fafa344
         flow = self._flows.get(user_id)
         if not flow or flow.mode != "qr" or not flow.qr_login:
             return None, None
@@ -152,11 +141,7 @@ class AuthFlowManager:
             flow.password = password.strip()
         return True
 
-<<<<<<< HEAD
     async def confirm_web(self, user_id: int) -> Tuple[Optional[str], Optional[str], str]:
-=======
-    async def confirm_web(self, user_id: int) -> tuple[Optional[str], Optional[str], str]:
->>>>>>> 9dd19731839bc17800be4d7e8cd1e3ac8fafa344
         flow = self._flows.get(user_id)
         if not flow or flow.mode != "web":
             return None, None, "FAILED"

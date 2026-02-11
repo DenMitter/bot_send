@@ -62,6 +62,37 @@ class BotSubscriber(Base):
     first_name: Mapped[Optional[str]] = mapped_column(String(64))
     last_name: Mapped[Optional[str]] = mapped_column(String(64))
     language: Mapped[Optional[str]] = mapped_column(String(8))
+    referrer_id: Mapped[Optional[int]] = mapped_column(BigInteger, index=True)
+    referred_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class UserBalance(Base):
+    __tablename__ = "user_balances"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    balance: Mapped[float] = mapped_column(default=0.0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class PriceConfig(Base):
+    __tablename__ = "price_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    price: Mapped[float] = mapped_column(default=0.0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class BalanceTransaction(Base):
+    __tablename__ = "balance_transactions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    amount: Mapped[float] = mapped_column()
+    tx_type: Mapped[str] = mapped_column(String(32))
+    reason: Mapped[Optional[str]] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -94,6 +125,36 @@ class ParsedChat(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class ParseFilter(Base):
+    __tablename__ = "parse_filters"
+
+    owner_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    status: Mapped[str] = mapped_column(String(16), default="all")
+    gender: Mapped[str] = mapped_column(String(16), default="any")
+    language: Mapped[str] = mapped_column(String(16), default="any")
+    activity: Mapped[str] = mapped_column(String(16), default="any")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AppSetting(Base):
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ReferralReward(Base):
+    __tablename__ = "referral_rewards"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    referrer_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    referral_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    amount: Mapped[float] = mapped_column()
+    source_tx_id: Mapped[Optional[int]] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class Mailing(Base):
     __tablename__ = "mailings"
 
@@ -114,6 +175,8 @@ class Mailing(Base):
     target_source: Mapped[TargetSource] = mapped_column(Enum(TargetSource))
     delay_seconds: Mapped[float] = mapped_column(default=1.0)
     limit_count: Mapped[int] = mapped_column(default=0)
+    repeat_delay_seconds: Mapped[float] = mapped_column(default=0.0)
+    repeat_count: Mapped[int] = mapped_column(default=1)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

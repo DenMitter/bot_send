@@ -84,11 +84,7 @@ async def _send_manual_message(
     media_path: Optional[str],
     reply_markup: Optional[InlineKeyboardMarkup],
     parse_mode: Optional[str] = "Markdown",
-<<<<<<< HEAD
 ) -> Tuple[Message, bool]:
-=======
-) -> tuple[Message, bool]:
->>>>>>> 9dd19731839bc17800be4d7e8cd1e3ac8fafa344
     if media_path:
         photo_source = FSInputFile(media_path) if not media_path.startswith("http") else media_path
         sent = await bot.send_photo(chat_id, photo_source, caption=text, parse_mode=parse_mode, reply_markup=reply_markup)
@@ -108,23 +104,42 @@ async def render_manual_message(
 ) -> Message:
     session = get_manual_session(chat_id)
     is_photo = bool(media_path)
-    if not session or session.message_id != current_message_id:
-        message, sent_is_photo = await _send_manual_message(bot, chat_id, text, media_path, reply_markup, parse_mode)
-        register_manual_session(chat_id, message.message_id, sent_is_photo)
-        return message
-
-    try:
-        if session.is_photo and is_photo:
-            edited = await bot.edit_message_caption(
-                chat_id=chat_id,
-                message_id=current_message_id,
-                caption=text,
-                parse_mode=parse_mode,
-                reply_markup=reply_markup,
-            )
-            register_manual_session(chat_id, current_message_id, True)
-            return edited
-        if not session.is_photo and not is_photo:
+    if session and session.message_id == current_message_id:
+        try:
+            if session.is_photo and is_photo:
+                edited = await bot.edit_message_caption(
+                    chat_id=chat_id,
+                    message_id=current_message_id,
+                    caption=text,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup,
+                )
+                register_manual_session(chat_id, current_message_id, True)
+                return edited
+            if not session.is_photo and not is_photo:
+                edited = await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=current_message_id,
+                    text=text,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup,
+                )
+                register_manual_session(chat_id, current_message_id, False)
+                return edited
+        except TelegramBadRequest:
+            pass
+    else:
+        try:
+            if is_photo:
+                edited = await bot.edit_message_caption(
+                    chat_id=chat_id,
+                    message_id=current_message_id,
+                    caption=text,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup,
+                )
+                register_manual_session(chat_id, current_message_id, True)
+                return edited
             edited = await bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=current_message_id,
@@ -134,8 +149,8 @@ async def render_manual_message(
             )
             register_manual_session(chat_id, current_message_id, False)
             return edited
-    except TelegramBadRequest:
-        pass
+        except TelegramBadRequest:
+            pass
 
     try:
         await bot.delete_message(chat_id, current_message_id)

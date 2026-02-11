@@ -1,5 +1,6 @@
 ﻿from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
-from typing import Dict
+from typing import Dict, Optional
+from urllib.parse import quote
 
 from app.i18n.translator import t
 
@@ -32,6 +33,13 @@ def back_button(locale: str, callback_data: str = "back:prev") -> InlineKeyboard
     return InlineKeyboardButton(text=t("btn_back", locale), callback_data=callback_data)
 
 
+def add_account_keyboard(locale: str, back_callback: Optional[str] = None) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text=t("btn_account_add", locale), callback_data="account:add")]]
+    if back_callback:
+        rows.append([back_button(locale, back_callback)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def language_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -43,7 +51,7 @@ def language_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def welcome_keyboard(locale: str) -> ReplyKeyboardMarkup:
+def welcome_keyboard(locale: str, is_admin_user: bool = False) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=_button_label("btn_welcome_mailing", locale))],
@@ -55,6 +63,11 @@ def welcome_keyboard(locale: str) -> ReplyKeyboardMarkup:
                 KeyboardButton(text=_button_label("btn_welcome_profile", locale)),
                 KeyboardButton(text=_button_label("btn_welcome_accounts", locale)),
             ],
+            *(
+                [[KeyboardButton(text=_button_label("btn_admin", locale))]]
+                if is_admin_user
+                else []
+            ),
             # [
             #     KeyboardButton(text=f"?? {t('btn_welcome_tasks', locale)}"),
             #     KeyboardButton(text=f"?? {t('btn_welcome_franchise', locale)}"),
@@ -68,14 +81,180 @@ def welcome_entry_keyboard(locale: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-<<<<<<< HEAD
-                InlineKeyboardButton(text=_button_label("btn_welcome_manuals", locale), callback_data="welcome:manual"),
-=======
-                InlineKeyboardButton(text=t("btn_manual_guide", locale), callback_data="welcome:manual"),
->>>>>>> 9dd19731839bc17800be4d7e8cd1e3ac8fafa344
-            ]
+                InlineKeyboardButton(text=t("btn_manual_guide", locale), callback_data="welcome:manual"),            ]
         ]
     )
+
+
+def mailing_intro_keyboard(locale: str, show_start: bool = False) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text=t("btn_mailing_settings", locale), callback_data="mailing:settings")]]
+    if show_start:
+        rows.append([InlineKeyboardButton(text=t("btn_mailing_start", locale), callback_data="mailing:start")])
+    return InlineKeyboardMarkup(
+        inline_keyboard=rows
+    )
+
+
+def parsing_intro_keyboard(locale: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=t("btn_parsing_accounts", locale), callback_data="parse:start")],
+            [InlineKeyboardButton(text=t("btn_parsing_filters", locale), callback_data="parse:filters")],
+        ]
+    )
+
+
+def parse_filters_keyboard(locale: str, filters: dict) -> InlineKeyboardMarkup:
+    status = filters.get("status", "all")
+    gender = filters.get("gender", "any")
+    language = filters.get("language", "any")
+    activity = filters.get("activity", "any")
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=t("filter_status_label", locale).format(value=t(f"filter_status_{status}", locale)),
+                    callback_data="parse:filters:status",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=t("filter_gender_label", locale).format(value=t(f"filter_gender_{gender}", locale)),
+                    callback_data="parse:filters:gender",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=t("filter_language_label", locale).format(value=t(f"filter_language_{language}", locale)),
+                    callback_data="parse:filters:language",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=t("filter_activity_label", locale).format(value=t(f"filter_activity_{activity}", locale)),
+                    callback_data="parse:filters:activity",
+                )
+            ],
+            [InlineKeyboardButton(text=t("filter_reset_btn", locale), callback_data="parse:filters:reset")],
+            [InlineKeyboardButton(text=t("btn_back", locale), callback_data="back:prev")],
+        ]
+    )
+
+
+def profile_keyboard(locale: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=t("btn_profile_topup", locale), callback_data="profile:topup"),
+                InlineKeyboardButton(text=t("btn_profile_history", locale), callback_data="profile:history"),
+            ],
+            [
+                InlineKeyboardButton(text=t("btn_profile_promo", locale), callback_data="profile:promo"),
+                InlineKeyboardButton(text=t("btn_profile_ref", locale), callback_data="profile:ref"),
+            ],
+            [InlineKeyboardButton(text=t("btn_profile_pro", locale), callback_data="profile:pro")],
+            [
+                InlineKeyboardButton(text=t("btn_profile_settings", locale), callback_data="profile:settings"),
+                InlineKeyboardButton(text=t("btn_profile_support", locale), callback_data="profile:support"),
+            ],
+            [InlineKeyboardButton(text=t("btn_profile_tariffs", locale), callback_data="profile:tariffs")],
+        ]
+    )
+
+
+def support_keyboard(locale: str, url: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=t("support_btn_telegram", locale), url=url)],
+            [InlineKeyboardButton(text=t("btn_back", locale), callback_data="back:prev")],
+        ]
+    )
+
+
+def referral_keyboard(locale: str, ref_link: str) -> InlineKeyboardMarkup:
+    share_url = ""
+    if ref_link:
+        share_url = (
+            "https://t.me/share/url?url="
+            + quote(ref_link, safe="")
+            + "&text="
+            + quote(t("referral_share_text", locale), safe="")
+        )
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=t("btn_ref_cryptobot", locale), url="https://t.me/CryptoBot"),
+                InlineKeyboardButton(text=t("btn_ref_balance", locale), callback_data="referral:balance"),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=t("btn_ref_invite", locale),
+                    url=share_url or "https://t.me/share/url",
+                )
+            ],
+            [InlineKeyboardButton(text=t("btn_back", locale), callback_data="back:prev")],
+        ]
+    )
+
+
+def mailing_settings_keyboard(locale: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=t("btn_mailing_settings_message", locale), callback_data="mailing:settings:message")],
+            [InlineKeyboardButton(text=t("btn_mailing_settings_timing", locale), callback_data="mailing:settings:timing")],
+            [InlineKeyboardButton(text=t("btn_mailing_settings_mentions", locale), callback_data="mailing:settings:mentions")],
+            [InlineKeyboardButton(text=t("btn_back", locale), callback_data="back:prev")],
+        ]
+    )
+
+
+def mailing_timing_keyboard(locale: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=t("btn_mailing_timing_chats", locale), callback_data="mailing:settings:timing:chats")],
+            [InlineKeyboardButton(text=t("btn_mailing_timing_rounds", locale), callback_data="mailing:settings:timing:rounds")],
+            [InlineKeyboardButton(text=t("btn_back", locale), callback_data="back:prev")],
+        ]
+    )
+
+
+def mailing_mentions_keyboard(locale: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=t("btn_enable", locale), callback_data="mailing:settings:mentions:on"),
+                InlineKeyboardButton(text=t("btn_disable", locale), callback_data="mailing:settings:mentions:off"),
+            ],
+            [InlineKeyboardButton(text=t("btn_back", locale), callback_data="back:prev")],
+        ]
+    )
+
+
+def mailing_accounts_keyboard(accounts, locale: str, page: int = 1, page_size: int = 5) -> InlineKeyboardMarkup:
+    total = len(accounts)
+    start = max(0, (page - 1) * page_size)
+    end = min(total, start + page_size)
+    page_accounts = accounts[start:end]
+
+    rows = []
+    for acc in page_accounts:
+        status = _account_status_icon(acc.is_active)
+        rows.append(
+            [InlineKeyboardButton(text=f"{status} {acc.id}: {acc.phone}", callback_data=f"mailing:default_account:{acc.id}")]
+        )
+
+    nav = []
+    if page > 1:
+        nav.append(InlineKeyboardButton(text=t("btn_prev", locale), callback_data=f"mailing:accounts:page:{page - 1}"))
+    if end < total:
+        nav.append(InlineKeyboardButton(text=t("btn_next", locale), callback_data=f"mailing:accounts:page:{page + 1}"))
+    if nav:
+        rows.append(nav)
+
+    rows.append([InlineKeyboardButton(text=t("btn_account_add", locale), callback_data="account:add")])
+    rows.append([InlineKeyboardButton(text=t("btn_back", locale), callback_data="back:prev")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def manual_inline_keyboard(locale: str, page: int) -> InlineKeyboardMarkup:
@@ -112,14 +291,76 @@ def admin_menu_keyboard(locale: str) -> InlineKeyboardMarkup:
     )
 
 
+def admin_panel_keyboard(locale: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=t("btn_mailing_list", locale), callback_data="mailing:list"),
+                InlineKeyboardButton(text=t("btn_account_list", locale), callback_data="account:list"),
+            ],
+            [
+                InlineKeyboardButton(text=t("btn_parse", locale), callback_data="parse:start"),
+                InlineKeyboardButton(text=t("btn_parse_chats", locale), callback_data="parse:chats"),
+            ],
+            [
+                InlineKeyboardButton(text=t("btn_admin_prices", locale), callback_data="admin:prices"),
+                InlineKeyboardButton(text=t("btn_admin_price_set", locale), callback_data="admin:price_set"),
+            ],
+            [
+                InlineKeyboardButton(text=t("btn_admin_mailing_tariffs", locale), callback_data="admin:mailing_tariffs"),
+            ],
+            [
+                InlineKeyboardButton(text=t("btn_admin_balance_add", locale), callback_data="admin:balance_add"),
+            ],
+            [
+                InlineKeyboardButton(text=t("btn_admin_support", locale), callback_data="admin:support_set"),
+            ],
+            [back_button(locale)],
+        ]
+    )
+
+
+def price_keys_keyboard(locale: str) -> InlineKeyboardMarkup:
+    keys = [
+        ("mailing_message", t("price_key_mailing_message", locale)),
+        ("mailing_message_mention", t("price_key_mailing_message_mention", locale)),
+        ("parse_participants_user", t("price_key_parse_participants_user", locale)),
+        ("parse_history_user", t("price_key_parse_history_user", locale)),
+        ("parse_chats_chat", t("price_key_parse_chats_chat", locale)),
+    ]
+    rows = [
+        [InlineKeyboardButton(text=label, callback_data=f"admin:price:key:{key}")]
+        for key, label in keys
+    ]
+    rows.append([back_button(locale)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def mailing_tariff_keys_keyboard(locale: str) -> InlineKeyboardMarkup:
+    keys = [
+        ("mailing_tariff_base", t("mailing_tariff_base", locale)),
+        ("mailing_tariff_mention", t("mailing_tariff_mention", locale)),
+        ("mailing_tariff_bulk_low", t("mailing_tariff_bulk_low", locale)),
+        ("mailing_tariff_bulk_high", t("mailing_tariff_bulk_high", locale)),
+    ]
+    rows = [
+        [InlineKeyboardButton(text=label, callback_data=f"admin:mailing_tariff:key:{key}")]
+        for key, label in keys
+    ]
+    rows.append([back_button(locale)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def account_auth_method_keyboard(locale: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(text=t("btn_auth_phone", locale), callback_data="auth:phone"),
+            ],
+            [
+                InlineKeyboardButton(text=t("btn_auth_web", locale), callback_data="auth:web"),
                 InlineKeyboardButton(text=t("btn_auth_qr", locale), callback_data="auth:qr"),
             ],
-            [InlineKeyboardButton(text=t("btn_auth_web", locale), callback_data="auth:web")],
             [back_button(locale)],
         ]
     )
@@ -212,6 +453,26 @@ def parse_account_keyboard(accounts, locale: str, mode: str) -> InlineKeyboardMa
     )
     rows.append([back_button(locale)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def parse_mode_keyboard(locale: str, mode_prefix: str = "users") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=t("parse_mode_participants", locale), callback_data=f"parse:{mode_prefix}:mode:participants")],
+            [InlineKeyboardButton(text=t("parse_mode_history", locale), callback_data=f"parse:{mode_prefix}:mode:history")],
+            [back_button(locale)],
+        ]
+    )
+
+
+def parse_history_scope_keyboard(locale: str, mode_prefix: str = "users") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=t("parse_history_all", locale), callback_data=f"parse:{mode_prefix}:history:all")],
+            [InlineKeyboardButton(text=t("parse_history_limit", locale), callback_data=f"parse:{mode_prefix}:history:limit")],
+            [back_button(locale)],
+        ]
+    )
 
 
 def chats_scope_keyboard(locale: str) -> InlineKeyboardMarkup:

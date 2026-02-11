@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
 from aiogram.types import InlineKeyboardMarkup, Message
+from aiogram.exceptions import TelegramBadRequest
 
 STACK_LIMIT = 25
 
@@ -21,6 +22,7 @@ class MessageSnapshot:
 _history: Dict[int, List[MessageSnapshot]] = defaultdict(list)
 _last_message: Dict[int, MessageSnapshot] = {}
 _welcome_pages: Dict[int, int] = {}
+_menu_photos: Dict[int, int] = {}
 
 
 def _extract_text(message: Message) -> str:
@@ -72,6 +74,10 @@ def register_message(
     )
 
 
+def get_last_message(chat_id: int) -> Optional[MessageSnapshot]:
+    return _last_message.get(chat_id)
+
+
 def pop_state(chat_id: int) -> Optional[MessageSnapshot]:
     stack = _history.get(chat_id)
     if not stack:
@@ -83,6 +89,7 @@ def clear_history(chat_id: int) -> None:
     _history.pop(chat_id, None)
     _last_message.pop(chat_id, None)
     _welcome_pages.pop(chat_id, None)
+    _menu_photos.pop(chat_id, None)
 
 
 def set_welcome_page(chat_id: int, page: int) -> None:
@@ -93,6 +100,17 @@ def get_welcome_page(chat_id: int) -> int:
     return _welcome_pages.get(chat_id, 1)
 
 
+def set_menu_photo(chat_id: int, message_id: Optional[int]) -> None:
+    if message_id is None:
+        _menu_photos.pop(chat_id, None)
+        return
+    _menu_photos[chat_id] = message_id
+
+
+def get_menu_photo(chat_id: int) -> Optional[int]:
+    return _menu_photos.get(chat_id)
+
+
 async def edit_with_history(
     message: Message,
     text: str,
@@ -101,6 +119,11 @@ async def edit_with_history(
     **options: Any,
 ) -> Message:
     push_state(message, options, media_paths)
-    edited = await message.edit_text(text, reply_markup=reply_markup, **options)
-    register_message(edited, options, media_paths)
-    return edited
+    try:
+        edited = await message.edit_text(text, reply_markup=reply_markup, **options)
+        register_message(edited, options, media_paths)
+        return edited
+    except TelegramBadRequest as exc:
+        if "message is not modified" in str(exc):
+            return message
+        raise

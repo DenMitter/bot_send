@@ -7,17 +7,20 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, FSInputFile, Message
+import json
 from sqlalchemy import func, select
 from telethon import errors as telethon_errors
 from telethon.errors.rpcerrorlist import AuthKeyUnregisteredError
 
 from app.bot.history import capture_previous_message, clear_history, edit_with_history, register_message, set_welcome_page
-from app.bot.handlers.common import is_admin, resolve_locale
+from app.bot.handlers.common import is_admin, resolve_locale, build_mailing_intro
 from app.bot.keyboards import (
     account_select_keyboard,
+    add_account_keyboard,
     back_to_menu_keyboard,
     chats_scope_keyboard,
     chats_select_keyboard,
+    account_auth_method_keyboard,
     mailing_mention_keyboard,
     mailing_actions_keyboard,
     mailing_details_keyboard,
@@ -26,16 +29,24 @@ from app.bot.keyboards import (
     mailing_source_keyboard,
     step_back_keyboard,
     welcome_entry_keyboard,
+    mailing_settings_keyboard,
+    mailing_timing_keyboard,
+    mailing_mentions_keyboard,
+    mailing_accounts_keyboard,
 )
 from app.client.telethon_manager import TelethonManager
 from app.core.config import get_settings
-from app.db.models import Mailing, MailingRecipient, MessageType, ParsedChat, TargetSource
+from app.db.models import BotSubscriber, Mailing, MailingRecipient, MessageType, ParsedChat, ParsedUser, TargetSource
 from app.db.session import get_session_factory
 from app.i18n.translator import t
 from app.services.auth import AccountService
+from app.services.billing import BillingService
 from app.services.mailing.logs import get_mailing_log_path
 from app.services.mailing.service import MailingService
 from app.services.parser import ParserService
+from app.services.settings import get_setting, set_setting
+from typing import Optional, Dict
+from app.bot.handlers.accounts import AccountStates
 
 
 router = Router()
@@ -52,6 +63,8 @@ class MailingStates(StatesGroup):
     mention = State()
     delay = State()
     limit = State()
+    repeat_delay = State()
+    repeat_count = State()
     content = State()
 
 
@@ -61,6 +74,119 @@ class MailingControlStates(StatesGroup):
 
 class MailingEditStates(StatesGroup):
     content = State()
+
+
+class MailingSettingsStates(StatesGroup):
+    message = State()
+    timing_chats = State()
+    timing_rounds = State()
+
+
+async def _load_mailing_template(session) -> Optional[Dict]:
+    raw = await get_setting(session, "mailing_template")
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+async def _apply_global_settings_to_state(state: FSMContext, session) -> dict:
+    mentions_raw = await get_setting(session, "mailing_mentions_enabled")
+    timing_chats = await get_setting(session, "mailing_timing_chats")
+    timing_rounds = await get_setting(session, "mailing_timing_rounds")
+    template = await _load_mailing_template(session)
+
+    if mentions_raw in ("1", "0"):
+        await state.update_data(mention=mentions_raw == "1")
+    if timing_chats is not None:
+        try:
+            await state.update_data(delay=max(0.0, float(timing_chats)))
+        except ValueError:
+            pass
+    if timing_rounds is not None:
+        try:
+            await state.update_data(repeat_delay=max(0.0, float(timing_rounds)))
+        except ValueError:
+            pass
+    if template:
+        await state.update_data(template_payload=template)
+
+    return {
+        "mentions": mentions_raw in ("1", "0"),
+        "timing_chats": timing_chats is not None,
+        "timing_rounds": timing_rounds is not None,
+        "template": bool(template),
+    }
+
+
+async def _finalize_mailing_with_content(message: Message, state: FSMContext, content: dict) -> None:
+    locale = await resolve_locale(message.from_user.id, message.from_user.language_code)
+    data = await state.get_data()
+    source_value = data.get("source")
+    if source_value == "subscribers":
+        source = TargetSource.subscribers
+    elif source_value == "chats":
+        source = TargetSource.chats
+    else:
+        source = TargetSource.parsed
+    mention = bool(data.get("mention"))
+    delay = float(data.get("delay"))
+    limit = int(data.get("limit"))
+    repeat_delay = float(data.get("repeat_delay") or 0)
+    repeat_count = int(data.get("repeat_count") or 1)
+    account_id = data.get("account_id")
+    chat_id = data.get("chat_id")
+    chat_ids = data.get("chat_ids")
+
+    message_type = content["message_type"]
+    text = content.get("text")
+    media_path = content.get("media_path")
+    media_file_id = content.get("media_file_id")
+    sticker_set_name = content.get("sticker_set_name")
+    sticker_set_index = content.get("sticker_set_index")
+    sticker_pack_missing = content.get("sticker_pack_missing")
+
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        billing = BillingService(session)
+        price_message = await billing.get_price("mailing_message")
+        price_mention = await billing.get_price("mailing_message_mention")
+        price_per_message = price_message + (price_mention if mention else 0.0)
+
+        if account_id is None:
+            account = await AccountService(session).get_active_account(message.from_user.id)
+        else:
+            accounts = await AccountService(session).list_accounts(message.from_user.id)
+            account = next((acc for acc in accounts if acc.id == account_id), None)
+        if not account:
+            await message.answer(t("no_account", locale), reply_markup=add_account_keyboard(locale))
+            await state.clear()
+            return
+
+        mailing = await MailingService(session).create_mailing(
+            owner_id=message.from_user.id,
+            account_id=account.id,
+            chat_id=chat_id,
+            target_ids=chat_ids,
+            target_source=source,
+            message_type=message_type,
+            text=text,
+            media_path=media_path,
+            media_file_id=media_file_id,
+            sticker_set_name=sticker_set_name,
+            sticker_set_index=sticker_set_index,
+            mention=mention,
+            delay_seconds=delay,
+            limit_count=limit,
+            repeat_delay_seconds=repeat_delay,
+            repeat_count=repeat_count,
+        )
+    await message.answer(t("mailing_created", locale).format(id=mailing.id))
+    await message.answer(t("mailing_created_hint_tasks", locale))
+    await state.clear()
 
 
 async def _prompt(message: Message, state: FSMContext, text: str, reply_markup=None) -> None:
@@ -173,7 +299,7 @@ async def mailing_new(message: Message, state: FSMContext) -> None:
     await state.clear()
     accounts = await _list_accounts(message.from_user.id)
     if not accounts:
-        await message.answer(t("no_account", locale))
+        await message.answer(t("no_account", locale), reply_markup=add_account_keyboard(locale))
         return
     await _prompt(message, state, t("mailing_account", locale), reply_markup=account_select_keyboard(accounts, locale))
     await state.set_state(MailingStates.account)
@@ -190,6 +316,61 @@ async def mailing_account_cb(callback: CallbackQuery, state: FSMContext) -> None
         except ValueError:
             await callback.answer()
             return
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        service = AccountService(session)
+        if account_id is None:
+            account = await service.get_active_account(callback.from_user.id)
+        else:
+            accounts = await service.list_accounts(callback.from_user.id)
+            account = next((acc for acc in accounts if acc.id == account_id), None)
+        if not account:
+            await edit_with_history(
+                callback.message,
+                t("no_account", locale),
+                reply_markup=add_account_keyboard(locale, back_callback="back:prev"),
+            )
+            await callback.answer()
+            return
+        if not account.is_active:
+            await service.delete_account(callback.from_user.id, account.id)
+            await edit_with_history(
+                callback.message,
+                t("account_not_bound", locale).format(phone=account.phone),
+                reply_markup=account_auth_method_keyboard(locale),
+            )
+            await state.set_state(AccountStates.method)
+            await callback.answer()
+            return
+        try:
+            client = await _parser_manager.get_client(account)
+            authorized = await client.is_user_authorized()
+            if not authorized:
+                raise AuthKeyUnregisteredError(request=None)
+            await client.get_me()
+        except AuthKeyUnregisteredError:
+            await service.set_active(callback.from_user.id, account.id, False)
+            await service.delete_account(callback.from_user.id, account.id)
+            await edit_with_history(
+                callback.message,
+                t("account_not_bound", locale).format(phone=account.phone),
+                reply_markup=account_auth_method_keyboard(locale),
+            )
+            await state.set_state(AccountStates.method)
+            await callback.answer()
+            return
+        except telethon_errors.RPCError as err:
+            if isinstance(err, telethon_errors.UnauthorizedError) or "UNAUTHORIZED" in getattr(err, "message", ""):
+                await edit_with_history(callback.message, t("parse_unauthorized", locale), reply_markup=back_to_menu_keyboard(locale))
+            else:
+                await edit_with_history(
+                    callback.message,
+                    t("parse_failed", locale).format(error=getattr(err, "message", "RPC error")),
+                    reply_markup=back_to_menu_keyboard(locale),
+                )
+            await callback.answer()
+            return
+
     await state.update_data(account_id=account_id)
     await edit_with_history(callback.message, 
         t("mailing_source", locale),
@@ -236,7 +417,11 @@ async def mailing_back_account_cb(callback: CallbackQuery, state: FSMContext) ->
     locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
     accounts = await _list_accounts(callback.from_user.id)
     if not accounts:
-        await edit_with_history(callback.message, t("no_account", locale), reply_markup=back_to_menu_keyboard(locale))
+        await edit_with_history(
+            callback.message,
+            t("no_account", locale),
+            reply_markup=add_account_keyboard(locale, back_callback="back:prev"),
+        )
         await callback.answer()
         return
     await edit_with_history(callback.message, 
@@ -257,26 +442,62 @@ async def mailing_chats_scope_cb(callback: CallbackQuery, state: FSMContext) -> 
         await callback.answer()
         return
     if action == "all":
+        session_factory = get_session_factory()
+        async with session_factory() as session:
+            applied = await _apply_global_settings_to_state(state, session)
         await state.update_data(chat_id=None)
-        await edit_with_history(callback.message, t("mailing_mention", locale), reply_markup=mailing_mention_keyboard(locale))
-        await state.set_state(MailingStates.mention)
+        if not applied["mentions"]:
+            await edit_with_history(callback.message, t("mailing_mention", locale), reply_markup=mailing_mention_keyboard(locale))
+            await state.set_state(MailingStates.mention)
+        elif not applied["timing_chats"]:
+            await edit_with_history(callback.message, t("mailing_delay", locale))
+            await state.set_state(MailingStates.delay)
+            await state.update_data(prompt_id=callback.message.message_id)
+        else:
+            await edit_with_history(
+                callback.message,
+                t("mailing_limit", locale),
+                reply_markup=step_back_keyboard(locale, "mailing:back:delay"),
+            )
+            await state.set_state(MailingStates.limit)
         await callback.answer()
         return
 
     session_factory = get_session_factory()
     async with session_factory() as session:
         service = AccountService(session)
-        account = await service.get_active_account(callback.from_user.id)
+        data = await state.get_data()
+        account_id = data.get("account_id")
+        if account_id is None:
+            account = await service.get_active_account(callback.from_user.id)
+        else:
+            accounts = await service.list_accounts(callback.from_user.id)
+            account = next((acc for acc in accounts if acc.id == account_id), None)
         if not account:
-            await edit_with_history(callback.message, t("no_account", locale), reply_markup=back_to_menu_keyboard(locale))
+            await edit_with_history(
+                callback.message,
+                t("no_account", locale),
+                reply_markup=add_account_keyboard(locale, back_callback="back:prev"),
+            )
             await callback.answer()
             return
         parser = ParserService(session, _parser_manager)
         try:
+            client = await _parser_manager.get_client(account)
+            authorized = await client.is_user_authorized()
+            if not authorized:
+                raise AuthKeyUnregisteredError(request=None)
             await parser.parse_groups(account, callback.from_user.id)
         except AuthKeyUnregisteredError:
             await service.set_active(callback.from_user.id, account.id, False)
-            await callback.answer(t("account_not_bound", locale).format(phone=account.phone), show_alert=True)
+            await service.delete_account(callback.from_user.id, account.id)
+            await edit_with_history(
+                callback.message,
+                t("account_not_bound", locale).format(phone=account.phone),
+                reply_markup=account_auth_method_keyboard(locale),
+            )
+            await state.set_state(AccountStates.method)
+            await callback.answer()
             return
         except telethon_errors.RPCError as err:
             if isinstance(err, telethon_errors.UnauthorizedError) or "UNAUTHORIZED" in getattr(err, "message", ""):
@@ -352,9 +573,24 @@ async def mailing_chats_done_cb(callback: CallbackQuery, state: FSMContext) -> N
         )
         await callback.answer()
         return
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        applied = await _apply_global_settings_to_state(state, session)
     await state.update_data(chat_ids=selected)
-    await edit_with_history(callback.message, t("mailing_mention", locale), reply_markup=mailing_mention_keyboard(locale))
-    await state.set_state(MailingStates.mention)
+    if not applied["mentions"]:
+        await edit_with_history(callback.message, t("mailing_mention", locale), reply_markup=mailing_mention_keyboard(locale))
+        await state.set_state(MailingStates.mention)
+    elif not applied["timing_chats"]:
+        await edit_with_history(callback.message, t("mailing_delay", locale))
+        await state.set_state(MailingStates.delay)
+        await state.update_data(prompt_id=callback.message.message_id)
+    else:
+        await edit_with_history(
+            callback.message,
+            t("mailing_limit", locale),
+            reply_markup=step_back_keyboard(locale, "mailing:back:delay"),
+        )
+        await state.set_state(MailingStates.limit)
     await callback.answer()
 
 
@@ -404,6 +640,30 @@ async def mailing_back_limit_cb(callback: CallbackQuery, state: FSMContext) -> N
     await callback.answer()
 
 
+@router.callback_query(F.data == "mailing:back:repeat_delay")
+async def mailing_back_repeat_delay_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    await edit_with_history(
+        callback.message,
+        t("mailing_repeat_delay", locale),
+        reply_markup=step_back_keyboard(locale, "mailing:back:limit"),
+    )
+    await state.set_state(MailingStates.repeat_delay)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "mailing:back:repeat_count")
+async def mailing_back_repeat_count_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    await edit_with_history(
+        callback.message,
+        t("mailing_repeat_count", locale),
+        reply_markup=step_back_keyboard(locale, "mailing:back:repeat_delay"),
+    )
+    await state.set_state(MailingStates.repeat_count)
+    await callback.answer()
+
+
 @router.message(MailingStates.delay)
 async def mailing_delay(message: Message, state: FSMContext) -> None:
     locale = await resolve_locale(message.from_user.id, message.from_user.language_code)
@@ -426,7 +686,90 @@ async def mailing_limit(message: Message, state: FSMContext) -> None:
         await _edit_prompt(message, state, t("mailing_limit", locale), reply_markup=step_back_keyboard(locale, "mailing:back:delay"))
         return
     await state.update_data(limit=limit)
-    await _edit_prompt(message, state, t("mailing_content", locale), reply_markup=step_back_keyboard(locale, "mailing:back:limit"))
+    data = await state.get_data()
+    if data.get("repeat_delay") is not None:
+        await _edit_prompt(
+            message,
+            state,
+            t("mailing_repeat_count", locale),
+            reply_markup=step_back_keyboard(locale, "mailing:back:repeat_delay"),
+        )
+        await state.set_state(MailingStates.repeat_count)
+    else:
+        await _edit_prompt(
+            message,
+            state,
+            t("mailing_repeat_delay", locale),
+            reply_markup=step_back_keyboard(locale, "mailing:back:limit"),
+        )
+        await state.set_state(MailingStates.repeat_delay)
+
+
+@router.message(MailingStates.repeat_delay)
+async def mailing_repeat_delay(message: Message, state: FSMContext) -> None:
+    locale = await resolve_locale(message.from_user.id, message.from_user.language_code)
+    try:
+        delay = float((message.text or "").strip())
+        if delay < 0:
+            raise ValueError
+    except ValueError:
+        await _edit_prompt(
+            message,
+            state,
+            t("mailing_repeat_delay", locale),
+            reply_markup=step_back_keyboard(locale, "mailing:back:limit"),
+        )
+        return
+    await state.update_data(repeat_delay=delay)
+    await _edit_prompt(
+        message,
+        state,
+        t("mailing_repeat_count", locale),
+        reply_markup=step_back_keyboard(locale, "mailing:back:repeat_delay"),
+    )
+    await state.set_state(MailingStates.repeat_count)
+
+
+@router.message(MailingStates.repeat_count)
+async def mailing_repeat_count(message: Message, state: FSMContext) -> None:
+    locale = await resolve_locale(message.from_user.id, message.from_user.language_code)
+    try:
+        count = int((message.text or "").strip())
+        if count <= 0:
+            raise ValueError
+    except ValueError:
+        await _edit_prompt(
+            message,
+            state,
+            t("mailing_repeat_count", locale),
+            reply_markup=step_back_keyboard(locale, "mailing:back:repeat_delay"),
+        )
+        return
+    await state.update_data(repeat_count=count)
+    data = await state.get_data()
+    template_payload = data.get("template_payload")
+    if template_payload:
+        try:
+            message_type = MessageType(template_payload.get("message_type", MessageType.text.value))
+        except Exception:
+            message_type = MessageType.text
+        content = {
+            "message_type": message_type,
+            "text": template_payload.get("text"),
+            "media_path": template_payload.get("media_path"),
+            "media_file_id": template_payload.get("media_file_id"),
+            "sticker_set_name": template_payload.get("sticker_set_name"),
+            "sticker_set_index": template_payload.get("sticker_set_index"),
+            "sticker_pack_missing": template_payload.get("sticker_pack_missing"),
+        }
+        await _finalize_mailing_with_content(message, state, content)
+        return
+    await _edit_prompt(
+        message,
+        state,
+        t("mailing_content", locale),
+        reply_markup=step_back_keyboard(locale, "mailing:back:repeat_count"),
+    )
     await state.set_state(MailingStates.content)
 
 
@@ -443,51 +786,16 @@ async def mailing_content(message: Message, state: FSMContext) -> None:
         sticker_pack_missing,
     ) = await _extract_mailing_content(message)
 
-    data = await state.get_data()
-    source_value = data.get("source")
-    if source_value == "subscribers":
-        source = TargetSource.subscribers
-    elif source_value == "chats":
-        source = TargetSource.chats
-    else:
-        source = TargetSource.parsed
-    mention = bool(data.get("mention"))
-    delay = float(data.get("delay"))
-    limit = int(data.get("limit"))
-    account_id = data.get("account_id")
-    chat_id = data.get("chat_id")
-    chat_ids = data.get("chat_ids")
-
-    session_factory = get_session_factory()
-    async with session_factory() as session:
-        if account_id is None:
-            account = await AccountService(session).get_active_account(message.from_user.id)
-        else:
-            accounts = await AccountService(session).list_accounts(message.from_user.id)
-            account = next((acc for acc in accounts if acc.id == account_id), None)
-        if not account:
-            await message.answer(t("no_account", locale))
-            await state.clear()
-            return
-        mailing = await MailingService(session).create_mailing(
-            owner_id=message.from_user.id,
-            account_id=account.id,
-            chat_id=chat_id,
-            target_ids=chat_ids,
-            target_source=source,
-            message_type=message_type,
-            text=text,
-            media_path=media_path,
-            media_file_id=media_file_id,
-            sticker_set_name=sticker_set_name,
-            sticker_set_index=sticker_set_index,
-            mention=mention,
-            delay_seconds=delay,
-            limit_count=limit,
-        )
-
-    await message.answer(t("mailing_created", locale).format(id=mailing.id))
-    await state.clear()
+    content = {
+        "message_type": message_type,
+        "text": text,
+        "media_path": media_path,
+        "media_file_id": media_file_id,
+        "sticker_set_name": sticker_set_name,
+        "sticker_set_index": sticker_set_index,
+        "sticker_pack_missing": sticker_pack_missing,
+    }
+    await _finalize_mailing_with_content(message, state, content)
 
 
 @router.callback_query(F.data.startswith("mailing:edit:"))
@@ -640,7 +948,11 @@ async def mailing_new_cb(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     accounts = await _list_accounts(callback.from_user.id)
     if not accounts:
-        await edit_with_history(callback.message, t("no_account", locale), reply_markup=back_to_menu_keyboard(locale))
+        await edit_with_history(
+            callback.message,
+            t("no_account", locale),
+            reply_markup=add_account_keyboard(locale, back_callback="back:prev"),
+        )
         await callback.answer()
         return
     await edit_with_history(callback.message, 
@@ -649,6 +961,203 @@ async def mailing_new_cb(callback: CallbackQuery, state: FSMContext) -> None:
     )
     await state.set_state(MailingStates.account)
     await state.update_data(prompt_id=callback.message.message_id)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "mailing:settings")
+async def mailing_settings_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    await state.clear()
+    await edit_with_history(
+        callback.message,
+        t("mailing_settings_text", locale),
+        reply_markup=mailing_settings_keyboard(locale),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mailing:accounts"))
+async def mailing_accounts_cb(callback: CallbackQuery) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        accounts = await AccountService(session).list_accounts(callback.from_user.id)
+    if not accounts:
+        await edit_with_history(
+            callback.message,
+            t("no_account", locale),
+            reply_markup=add_account_keyboard(locale, back_callback="back:prev"),
+        )
+        await callback.answer()
+        return
+    data = callback.data.split(":")
+    page = 1
+    if len(data) >= 4 and data[2] == "page":
+        try:
+            page = max(1, int(data[3]))
+        except ValueError:
+            pass
+    await edit_with_history(
+        callback.message,
+        t("mailing_account", locale),
+        reply_markup=mailing_accounts_keyboard(accounts, locale, page=page),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mailing:default_account:"))
+async def mailing_default_account_cb(callback: CallbackQuery) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    try:
+        account_id = int(callback.data.split(":")[-1])
+    except ValueError:
+        await callback.answer()
+        return
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        service = AccountService(session)
+        ok = await service.set_active(callback.from_user.id, account_id, True)
+    if not ok:
+        await edit_with_history(callback.message, t("account_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
+        await callback.answer()
+        return
+    intro = await build_mailing_intro(locale)
+    await edit_with_history(
+        callback.message,
+        intro,
+        reply_markup=mailing_intro_keyboard(locale, show_start=True),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "mailing:start")
+async def mailing_start_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    await mailing_new_cb(callback, state)
+
+
+@router.callback_query(F.data == "mailing:settings:message")
+async def mailing_settings_message_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    await edit_with_history(callback.message, t("mailing_settings_message_prompt", locale), reply_markup=back_to_menu_keyboard(locale))
+    await state.set_state(MailingSettingsStates.message)
+    await callback.answer()
+
+
+@router.message(MailingSettingsStates.message)
+async def mailing_settings_message_input(message: Message, state: FSMContext) -> None:
+    locale = await resolve_locale(message.from_user.id, message.from_user.language_code)
+    content = await _extract_mailing_content(message)
+    message_type, text, media_path, media_file_id, sticker_set_name, sticker_set_index, sticker_pack_missing = content
+    if not text and not media_path and not media_file_id:
+        await message.answer(t("mailing_settings_message_prompt", locale))
+        return
+    payload = {
+        "message_type": message_type.value,
+        "text": text,
+        "media_path": media_path,
+        "media_file_id": media_file_id,
+        "sticker_set_name": sticker_set_name,
+        "sticker_set_index": sticker_set_index,
+        "sticker_pack_missing": sticker_pack_missing,
+    }
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        await set_setting(session, "mailing_template", json.dumps(payload, ensure_ascii=False))
+    await message.answer(t("mailing_settings_message_saved", locale))
+    await state.clear()
+
+
+@router.callback_query(F.data == "mailing:settings:timing")
+async def mailing_settings_timing_cb(callback: CallbackQuery) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    await edit_with_history(
+        callback.message,
+        t("mailing_settings_timing_text", locale),
+        reply_markup=mailing_timing_keyboard(locale),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "mailing:settings:timing:chats")
+async def mailing_settings_timing_chats_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    await edit_with_history(callback.message, t("mailing_settings_timing_chats_prompt", locale), reply_markup=back_to_menu_keyboard(locale))
+    await state.set_state(MailingSettingsStates.timing_chats)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "mailing:settings:timing:rounds")
+async def mailing_settings_timing_rounds_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    await edit_with_history(callback.message, t("mailing_settings_timing_rounds_prompt", locale), reply_markup=back_to_menu_keyboard(locale))
+    await state.set_state(MailingSettingsStates.timing_rounds)
+    await callback.answer()
+
+
+@router.message(MailingSettingsStates.timing_chats)
+async def mailing_settings_timing_chats_input(message: Message, state: FSMContext) -> None:
+    locale = await resolve_locale(message.from_user.id, message.from_user.language_code)
+    try:
+        value = float((message.text or "").replace(",", ".").strip())
+    except ValueError:
+        await message.answer(t("mailing_settings_timing_invalid", locale))
+        return
+    if value < 0:
+        await message.answer(t("mailing_settings_timing_invalid", locale))
+        return
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        await set_setting(session, "mailing_timing_chats", str(value))
+    await message.answer(t("mailing_settings_timing_saved", locale).format(value=value))
+    await state.clear()
+
+
+@router.message(MailingSettingsStates.timing_rounds)
+async def mailing_settings_timing_rounds_input(message: Message, state: FSMContext) -> None:
+    locale = await resolve_locale(message.from_user.id, message.from_user.language_code)
+    try:
+        value = float((message.text or "").replace(",", ".").strip())
+    except ValueError:
+        await message.answer(t("mailing_settings_timing_invalid", locale))
+        return
+    if value < 0:
+        await message.answer(t("mailing_settings_timing_invalid", locale))
+        return
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        await set_setting(session, "mailing_timing_rounds", str(value))
+    await message.answer(t("mailing_settings_timing_saved", locale).format(value=value))
+    await state.clear()
+
+
+@router.callback_query(F.data == "mailing:settings:mentions")
+async def mailing_settings_mentions_cb(callback: CallbackQuery) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    await edit_with_history(
+        callback.message,
+        t("mailing_settings_mentions_text", locale),
+        reply_markup=mailing_mentions_keyboard(locale),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "mailing:settings:mentions:on")
+async def mailing_settings_mentions_on_cb(callback: CallbackQuery) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        await set_setting(session, "mailing_mentions_enabled", "1")
+    await callback.message.answer(t("mailing_settings_mentions_saved_on", locale))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "mailing:settings:mentions:off")
+async def mailing_settings_mentions_off_cb(callback: CallbackQuery) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        await set_setting(session, "mailing_mentions_enabled", "0")
+    await callback.message.answer(t("mailing_settings_mentions_saved_off", locale))
     await callback.answer()
 
 

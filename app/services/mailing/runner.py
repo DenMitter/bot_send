@@ -15,6 +15,8 @@ from telethon.tl.functions.messages import GetStickerSetRequest
 from telethon.tl.types import (
     DocumentAttributeImageSize,
     DocumentAttributeSticker,
+    InputPeerChannel,
+    InputPeerChat,
     InputPeerUser,
     InputStickerSetEmpty,
     InputStickerSetShortName,
@@ -29,9 +31,15 @@ from app.db.models import (
     MailingStatus,
     MessageType,
     RecipientStatus,
+    TargetSource,
 )
 from app.services.mailing.logs import append_recipient_log
 from app.services.auth import AccountService
+from app.services.billing import BillingService
+
+
+class _InsufficientBalanceError(RuntimeError):
+    pass
 
 
 class MailingRunner:
@@ -72,6 +80,11 @@ class MailingRunner:
             await self._session.commit()
             return
 
+        billing = BillingService(self._session)
+        price_message = await billing.get_price("mailing_message")
+        price_mention = await billing.get_price("mailing_message_mention")
+        price_per_message = price_message + (price_mention if mailing.mention else 0.0)
+
         client = await self._manager.get_client(account)
         pending = await self._session.execute(
             select(MailingRecipient)
@@ -94,10 +107,23 @@ class MailingRunner:
                 break
 
             try:
-                await self._send_to_recipient(client, mailing, recipient)
+                await self._send_to_recipient(client, mailing, recipient, billing, price_per_message)
                 recipient.status = RecipientStatus.sent
                 recipient.sent_at = datetime.utcnow()
                 recipient.error = None
+            except _InsufficientBalanceError:
+                mailing.status = MailingStatus.failed
+                mailing.updated_at = datetime.utcnow()
+                recipient.status = RecipientStatus.failed
+                recipient.error = "Insufficient balance"
+                append_recipient_log(
+                    mailing.id,
+                    recipient.user_id,
+                    recipient.username,
+                    "Insufficient balance",
+                )
+                await self._session.commit()
+                break
             except Exception as exc:
                 self._logger.exception(
                     "Mailing send failed mailing_id=%s recipient=%s username=%s type=%s media_path=%s media_file_id=%s set=%s index=%s",
@@ -116,12 +142,35 @@ class MailingRunner:
             await self._session.commit()
             await asyncio.sleep(mailing.delay_seconds)
 
-    async def _send_to_recipient(self, client, mailing: Mailing, recipient: MailingRecipient) -> None:
+    async def _send_to_recipient(
+        self,
+        client,
+        mailing: Mailing,
+        recipient: MailingRecipient,
+        billing: BillingService,
+        price_per_message: float,
+    ) -> None:
+        repeat_count = int(getattr(mailing, "repeat_count", 1) or 1)
+        repeat_delay = float(getattr(mailing, "repeat_delay_seconds", 0) or 0)
+        repeat_count = max(1, repeat_count)
+
+        for idx in range(repeat_count):
+            if price_per_message > 0:
+                balance = await billing.get_balance(mailing.owner_id)
+                if balance < price_per_message:
+                    raise _InsufficientBalanceError()
+            await self._send_once(client, mailing, recipient)
+            if price_per_message > 0:
+                await billing.charge(mailing.owner_id, price_per_message, reason="mailing_message")
+            if idx < repeat_count - 1 and repeat_delay > 0:
+                await asyncio.sleep(repeat_delay)
+
+    async def _send_once(self, client, mailing: Mailing, recipient: MailingRecipient) -> None:
         base_text = mailing.text or ""
         if mailing.mention and recipient.username:
             base_text = f"{base_text}\n@{recipient.username}" if base_text else f"@{recipient.username}"
 
-        target = await self._resolve_target_entity(client, recipient)
+        target = await self._resolve_target_entity(client, mailing, recipient)
         if not target:
             raise RuntimeError(f"Could not resolve input entity for recipient={recipient.user_id}")
 
@@ -186,7 +235,25 @@ class MailingRunner:
             return media_path
         return str((self._base_dir / media_path).resolve())
 
-    async def _resolve_target_entity(self, client, recipient: MailingRecipient):
+    async def _resolve_target_entity(self, client, mailing: Mailing, recipient: MailingRecipient):
+        if mailing.target_source == TargetSource.chats:
+            if recipient.access_hash:
+                return InputPeerChannel(recipient.user_id, recipient.access_hash)
+            if recipient.username:
+                normalized = f"@{recipient.username.lstrip('@')}"
+                try:
+                    return await client.get_input_entity(normalized)
+                except (RPCError, ValueError):
+                    pass
+            try:
+                return InputPeerChat(recipient.user_id)
+            except (RPCError, ValueError):
+                pass
+            try:
+                return await client.get_input_entity(recipient.user_id)
+            except (RPCError, ValueError):
+                return None
+
         if recipient.access_hash:
             return InputPeerUser(recipient.user_id, recipient.access_hash)
         if recipient.username:
