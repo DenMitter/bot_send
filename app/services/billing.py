@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,7 +17,7 @@ class BillingService:
         balance = result.scalars().first()
         return balance.balance if balance else 0.0
 
-    async def add_balance(self, user_id: int, amount: float, reason: str | None = None) -> tuple[float, int]:
+    async def add_balance(self, user_id: int, amount: float, reason: Optional[str] = None) -> Tuple[float, int]:
         result = await self._session.execute(select(UserBalance).where(UserBalance.user_id == user_id))
         balance = result.scalars().first()
         if not balance:
@@ -36,7 +36,7 @@ class BillingService:
         await self._session.commit()
         return balance.balance, tx.id
 
-    async def charge(self, user_id: int, amount: float, reason: str | None = None) -> float:
+    async def charge(self, user_id: int, amount: float, reason: Optional[str] = None) -> float:
         if amount <= 0:
             return await self.get_balance(user_id)
         result = await self._session.execute(select(UserBalance).where(UserBalance.user_id == user_id))

@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Union
 
 from aiogram.types import Message
 from sqlalchemy import select
@@ -9,7 +9,7 @@ from app.db.session import get_session_factory
 from app.i18n.translator import LANG_MAP, t
 from app.services.settings import get_setting
 
-def is_enabled(value: str | None) -> bool:
+def is_enabled(value: Optional[str]) -> bool:
     return (value or "").lower() in {"1", "true", "yes", "on", "enabled"}
 
 def is_admin(message: Message) -> bool:

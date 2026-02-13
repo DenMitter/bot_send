@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from telethon.tl.types import (
@@ -51,7 +52,7 @@ class ParserService:
         return {admin.id for admin in admins if isinstance(admin, User)}
 
     @staticmethod
-    def _infer_gender(first_name: str | None) -> str:
+    def _infer_gender(first_name: Optional[str]) -> str:
         name = (first_name or "").strip()
         if not name:
             return "unknown"
@@ -63,7 +64,7 @@ class ParserService:
         return "male"
 
     @staticmethod
-    def _infer_language(first_name: str | None, last_name: str | None) -> str:
+    def _infer_language(first_name: Optional[str], last_name: Optional[str]) -> str:
         text = f"{first_name or ''} {last_name or ''}".strip()
         if not text:
             return "other"
@@ -152,7 +153,7 @@ class ParserService:
         owner_id: int,
         chat: str,
         limit: int = 0,
-        max_users: int | None = None,
+        max_users: Optional[int] = None,
     ) -> int:
         client = await self._manager.get_client(account)
         filters = await self._get_filters(owner_id)
@@ -192,7 +193,7 @@ class ParserService:
         limit_messages: int = 0,
         include_mentions: bool = True,
         include_replies: bool = True,
-        max_users: int | None = None,
+        max_users: Optional[int] = None,
     ) -> int:
         client = await self._manager.get_client(account)
         filters = await self._get_filters(owner_id)
@@ -272,7 +273,7 @@ class ParserService:
         await self._session.commit()
         return added
 
-    async def parse_groups(self, account: Account, owner_id: int, max_chats: int | None = None) -> int:
+    async def parse_groups(self, account: Account, owner_id: int, max_chats: Optional[int] = None) -> int:
         client = await self._manager.get_client(account)
         added = 0
         async for dialog in client.iter_dialogs():
