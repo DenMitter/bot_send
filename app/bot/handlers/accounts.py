@@ -138,6 +138,13 @@ async def account_method_qr(callback: CallbackQuery, state: FSMContext) -> None:
     await _safe_callback_answer(callback)
 
 
+@router.callback_query(F.data == "auth:will_be_available_soon")
+async def account_method_will_be_available_soon(callback: CallbackQuery, state: FSMContext) -> None:
+    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    await callback.message.answer(t("will_be_available_soon", locale))
+    await _safe_callback_answer(callback)
+
+
 @router.message(AccountStates.phone)
 async def account_phone(message: Message, state: FSMContext) -> None:
     locale = await resolve_locale(message.from_user.id, message.from_user.language_code)

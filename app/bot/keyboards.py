@@ -13,7 +13,7 @@ BUTTON_ICONS: Dict[str, str] = {
     "btn_parsed_users_db": "🗂️",
     "btn_welcome_profile": "👤",
     "btn_welcome_accounts": "💼",
-    "btn_welcome_manuals": "📘",
+    # "btn_welcome_manuals": "📘",
     "btn_welcome_tasks": "📝",
     "btn_welcome_franchise": "🤝",
 }
@@ -58,7 +58,7 @@ def welcome_keyboard(locale: str, is_admin_user: bool = False) -> ReplyKeyboardM
             [KeyboardButton(text=_button_label("btn_welcome_parsing", locale))],
             [KeyboardButton(text=_button_label("btn_parsed_users_db", locale))],
             [KeyboardButton(text=_button_label("btn_welcome_tasks", locale))],
-            [KeyboardButton(text=_button_label("btn_welcome_manuals", locale))],
+            # [KeyboardButton(text=_button_label("btn_welcome_manuals", locale))],
             [
                 KeyboardButton(text=_button_label("btn_welcome_profile", locale)),
                 KeyboardButton(text=_button_label("btn_welcome_accounts", locale)),
@@ -359,7 +359,10 @@ def account_auth_method_keyboard(locale: str) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(text=t("btn_auth_web", locale), callback_data="auth:web"),
-                InlineKeyboardButton(text=t("btn_auth_qr", locale), callback_data="auth:qr"),
+                InlineKeyboardButton(text=t("btn_auth_qr", locale), callback_data="auth:will_be_available_soon"),
+            ],
+            [
+                InlineKeyboardButton(text=t("btn_auth_tdata", locale), callback_data="auth:will_be_available_soon"),
             ],
             [back_button(locale)],
         ]

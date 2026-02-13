@@ -25,6 +25,7 @@ class AccountService:
         self._session.add(account)
         await self._session.commit()
         await self._session.refresh(account)
+        
         return account
 
     async def list_accounts(self, owner_id: int) -> List[Account]:

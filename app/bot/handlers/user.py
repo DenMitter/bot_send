@@ -23,7 +23,7 @@ from app.bot.history import (
 from app.db.models import BotSubscriber, Mailing, BalanceTransaction, ReferralReward
 from app.db.session import get_session_factory
 from app.i18n.translator import t
-from app.bot.handlers.common import is_admin, normalize_locale, resolve_locale, build_mailing_intro
+from app.bot.handlers.common import is_admin, normalize_locale, resolve_locale, build_mailing_intro, build_parsing_intro
 from app.services.auth import AccountService
 from app.services.billing import BillingService
 from app.services.settings import get_setting, SUPPORT_CONTACT_KEY
@@ -33,13 +33,14 @@ from app.bot.keyboards import (
     language_keyboard,
     manual_inline_keyboard,
     mailing_intro_keyboard,
+    mailing_settings_keyboard,
     parsing_intro_keyboard,
     parse_mode_keyboard,
     admin_panel_keyboard,
     profile_keyboard,
     support_keyboard,
     referral_keyboard,
-    welcome_entry_keyboard,
+    # welcome_entry_keyboard,
     welcome_keyboard,
     WELCOME_PAGE_COUNT,
     mailing_list_keyboard,
@@ -103,7 +104,9 @@ async def _send_welcome_menu(message: Message, locale: str) -> None:
         set_menu_photo(message.chat.id, sent_photo.message_id)
     else:
         await message.answer(t("menu", locale), reply_markup=welcome_keyboard(locale, is_admin(message)))
-    sent = await message.answer(caption, reply_markup=welcome_entry_keyboard(locale))
+    # TODO: writting manual for bot, so hide welcome keyboard for now
+    # sent = await message.answer(caption, reply_markup=welcome_entry_keyboard(locale))
+    sent = await message.answer(caption)
     register_message(sent)
 
 
@@ -210,8 +213,8 @@ async def balance_handler(message: Message) -> None:
             reason = tx.reason or "-"
             lines.append(t("balance_history_line", locale).format(
                 amount=tx.amount,
-                tx_type=tx.tx_type,
-                reason=reason,
+                tx_type="Пополнение" if tx.tx_type == "topup" else tx.tx_type,
+                reason="Пополнение от админа" if reason == "admin_topup" else reason,
                 created_at=tx.created_at.strftime("%Y-%m-%d %H:%M"),
             ))
     else:
@@ -289,6 +292,49 @@ async def back_prev(callback: CallbackQuery) -> None:
     if not snapshot:
         await callback.answer()
         return
+    # If snapshot corresponds to dynamic mailing settings menu, rebuild it
+    buttons = []
+    if snapshot.reply_markup and getattr(snapshot.reply_markup, "inline_keyboard", None):
+        for row in snapshot.reply_markup.inline_keyboard:
+            for btn in row:
+                cb = getattr(btn, "callback_data", None)
+                if cb:
+                    buttons.append(cb)
+
+    # Only treat as settings menu if callbacks are the specific settings actions
+    if any(cb.startswith("mailing:settings:") for cb in buttons):
+        locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+        session_factory = get_session_factory()
+        async with session_factory() as session:
+            settings = await get_setting(session, [
+                "mailing_template",
+                "mailing_timing_chats",
+                "mailing_timing_rounds",
+                "mailing_mentions_enabled",
+            ], user_id=callback.from_user.id)
+
+        is_template = settings.get("mailing_template")
+        timing_chats = settings.get("mailing_timing_chats")
+        timing_rounds = settings.get("mailing_timing_rounds")
+        is_mentions = settings.get("mailing_mentions_enabled") == "1"
+
+        try:
+            edited = await callback.message.edit_text(
+                t("mailing_settings_text", locale).format(
+                    is_template=t("enabled", locale) if is_template else t("disabled", locale),
+                    timing_chats=timing_chats + " сек" if timing_chats else t("disabled", locale),
+                    timing_rounds=timing_rounds + " сек" if timing_rounds else t("disabled", locale),
+                    is_mentions=t("enabled", locale) if is_mentions else t("disabled", locale),
+                ),
+                reply_markup=mailing_settings_keyboard(locale),
+            )
+            register_message(edited)
+        except TelegramBadRequest:
+            pass
+        await callback.answer()
+        return
+
+    # Fallback: render stored snapshot (manual pages, static messages)
     media_path = _first_media_path(snapshot.media_paths)
     parse_mode = snapshot.options.get("parse_mode", "Markdown")
     body_text = snapshot.text
@@ -312,7 +358,7 @@ async def back_prev(callback: CallbackQuery) -> None:
 async def welcome_mailing(message: Message, state: FSMContext) -> None:
     locale = await resolve_locale(message.from_user.id, message.from_user.language_code)
     await state.clear()
-    intro = await build_mailing_intro(locale)
+    intro = await build_mailing_intro(locale, user_id=message.from_user.id)
     sent = await message.answer(intro, reply_markup=mailing_intro_keyboard(locale, show_start=True))
     register_message(sent)
 
@@ -321,7 +367,8 @@ async def welcome_mailing(message: Message, state: FSMContext) -> None:
 async def welcome_parsing(message: Message, state: FSMContext) -> None:
     locale = await resolve_locale(message.from_user.id, message.from_user.language_code)
     await state.clear()
-    sent = await message.answer(t("parsing_intro", locale), reply_markup=parsing_intro_keyboard(locale))
+    intro = await build_parsing_intro(locale, user_id=message.from_user.id)
+    sent = await message.answer(intro, reply_markup=parsing_intro_keyboard(locale))
     register_message(sent)
 
 

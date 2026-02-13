@@ -9,6 +9,8 @@ from app.db.session import get_session_factory
 from app.i18n.translator import LANG_MAP, t
 from app.services.settings import get_setting
 
+def is_enabled(value: str | None) -> bool:
+    return (value or "").lower() in {"1", "true", "yes", "on", "enabled"}
 
 def is_admin(message: Message) -> bool:
     settings = get_settings()
@@ -47,23 +49,53 @@ async def resolve_locale(user_id: int, fallback: Optional[str] = None) -> str:
     return normalize_locale(fallback)
 
 
-async def build_mailing_intro(locale: str) -> str:
+async def build_mailing_intro(locale: str, user_id: Optional[int] = None) -> str:
     defaults = {
         "mailing_tariff_base": "0.016",
         "mailing_tariff_mention": "0.02",
         "mailing_tariff_bulk_low": "0.008",
         "mailing_tariff_bulk_high": "0.01",
     }
-    values = defaults.copy()
     session_factory = get_session_factory()
     async with session_factory() as session:
-        for key in defaults:
-            raw = await get_setting(session, key)
-            if raw:
-                values[key] = raw
+        # Always get global settings first (user_id=0)
+        settings = await get_setting(session, list(defaults.keys()), user_id=0)
+        
+        # If user_id was provided and not 0, try to overlay user-specific settings
+        if user_id is not None and user_id != 0:
+            user_settings = await get_setting(session, list(defaults.keys()), user_id=user_id)
+            # Only update with user-specific values if they exist
+            for k, v in user_settings.items():
+                if v:
+                    settings[k] = v
+        
+        values = {k: settings.get(k) or defaults[k] for k in defaults}
     return t("mailing_intro", locale).format(
         base=values["mailing_tariff_base"],
         mention=values["mailing_tariff_mention"],
         bulk_low=values["mailing_tariff_bulk_low"],
         bulk_high=values["mailing_tariff_bulk_high"],
+    )
+
+
+async def build_parsing_intro(locale: str, user_id: Optional[int] = None) -> str:
+    defaults = {
+        "parse_participants_user": "0.001",
+    }
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        # Always get global settings first (user_id=0)
+        settings = await get_setting(session, list(defaults.keys()), user_id=0)
+        
+        # If user_id was provided and not 0, try to overlay user-specific settings
+        if user_id is not None and user_id != 0:
+            user_settings = await get_setting(session, list(defaults.keys()), user_id=user_id)
+            # Only update with user-specific values if they exist
+            for k, v in user_settings.items():
+                if v:
+                    settings[k] = v
+        
+        values = {k: settings.get(k) or defaults[k] for k in defaults}
+    return t("parsing_intro", locale).format(
+        base_price=values["parse_participants_user"],
     )

@@ -104,10 +104,11 @@ async def _apply_referral_reward(session, user_id: int, amount: float, source_tx
     )
     if existing.scalars().first():
         return
-    percent_raw = await get_setting(session, "referral_percent")
+    settings = await get_setting(session, ["referral_percent"])
+    percent_raw = settings.get("referral_percent")
     try:
         percent = float(percent_raw) if percent_raw is not None else 20.0
-    except ValueError:
+    except (ValueError, TypeError):
         percent = 20.0
     reward = round(amount * (percent / 100.0), 4)
     if reward <= 0:
@@ -513,6 +514,9 @@ async def _parse_chat_for_user(message: Message, chat: str) -> None:
         if not account:
             await message.answer(t("no_account", locale), reply_markup=add_account_keyboard(locale))
             return
+        
+        await message.answer(t("parse_starting", locale))
+
         billing = BillingService(session)
         price = await billing.get_price("parse_participants_user")
         max_users = None

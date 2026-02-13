@@ -139,6 +139,7 @@ class ParseFilter(Base):
 class AppSetting(Base):
     __tablename__ = "app_settings"
 
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=0)
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

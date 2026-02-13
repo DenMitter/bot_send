@@ -1,3 +1,4 @@
+import asyncio
 import os
 from uuid import uuid4
 
@@ -13,7 +14,7 @@ from telethon import errors as telethon_errors
 from telethon.errors.rpcerrorlist import AuthKeyUnregisteredError
 
 from app.bot.history import capture_previous_message, clear_history, edit_with_history, register_message, set_welcome_page
-from app.bot.handlers.common import is_admin, resolve_locale, build_mailing_intro
+from app.bot.handlers.common import is_admin, is_enabled, resolve_locale, build_mailing_intro
 from app.bot.keyboards import (
     account_select_keyboard,
     add_account_keyboard,
@@ -28,7 +29,8 @@ from app.bot.keyboards import (
     mailing_recipients_keyboard,
     mailing_source_keyboard,
     step_back_keyboard,
-    welcome_entry_keyboard,
+    # welcome_entry_keyboard,
+    mailing_intro_keyboard,
     mailing_settings_keyboard,
     mailing_timing_keyboard,
     mailing_mentions_keyboard,
@@ -82,8 +84,9 @@ class MailingSettingsStates(StatesGroup):
     timing_rounds = State()
 
 
-async def _load_mailing_template(session) -> Optional[Dict]:
-    raw = await get_setting(session, "mailing_template")
+async def _load_mailing_template(session, user_id: Optional[int] = None) -> Optional[Dict]:
+    settings = await get_setting(session, ["mailing_template"], user_id=user_id)
+    raw = settings.get("mailing_template")
     if not raw:
         return None
     try:
@@ -93,11 +96,25 @@ async def _load_mailing_template(session) -> Optional[Dict]:
     return payload if isinstance(payload, dict) else None
 
 
-async def _apply_global_settings_to_state(state: FSMContext, session) -> dict:
-    mentions_raw = await get_setting(session, "mailing_mentions_enabled")
-    timing_chats = await get_setting(session, "mailing_timing_chats")
-    timing_rounds = await get_setting(session, "mailing_timing_rounds")
-    template = await _load_mailing_template(session)
+async def _apply_global_settings_to_state(state: FSMContext, session, user_id: Optional[int] = None) -> dict:
+    settings = await get_setting(session, [
+        "mailing_mentions_enabled",
+        "mailing_timing_chats",
+        "mailing_timing_rounds",
+        "mailing_template",
+    ], user_id=user_id)
+    mentions_raw = settings.get("mailing_mentions_enabled")
+    timing_chats = settings.get("mailing_timing_chats")
+    timing_rounds = settings.get("mailing_timing_rounds")
+    template = None
+    raw_template = settings.get("mailing_template")
+    if raw_template:
+        try:
+            payload = json.loads(raw_template)
+            if isinstance(payload, dict):
+                template = payload
+        except Exception:
+            template = None
 
     if mentions_raw in ("1", "0"):
         await state.update_data(mention=mentions_raw == "1")
@@ -389,7 +406,8 @@ async def mailing_back_menu_cb(callback: CallbackQuery) -> None:
     await edit_with_history(
         callback.message,
         t("welcome_caption", locale),
-        reply_markup=welcome_entry_keyboard(locale),
+        # TODO: writting manual for bot, so hide welcome keyboard for now
+        # reply_markup=welcome_entry_keyboard(locale), 
     )
     await callback.answer()
 
@@ -444,7 +462,7 @@ async def mailing_chats_scope_cb(callback: CallbackQuery, state: FSMContext) -> 
     if action == "all":
         session_factory = get_session_factory()
         async with session_factory() as session:
-            applied = await _apply_global_settings_to_state(state, session)
+            applied = await _apply_global_settings_to_state(state, session, user_id=callback.from_user.id)
         await state.update_data(chat_id=None)
         if not applied["mentions"]:
             await edit_with_history(callback.message, t("mailing_mention", locale), reply_markup=mailing_mention_keyboard(locale))
@@ -575,7 +593,7 @@ async def mailing_chats_done_cb(callback: CallbackQuery, state: FSMContext) -> N
         return
     session_factory = get_session_factory()
     async with session_factory() as session:
-        applied = await _apply_global_settings_to_state(state, session)
+        applied = await _apply_global_settings_to_state(state, session, user_id=callback.from_user.id)
     await state.update_data(chat_ids=selected)
     if not applied["mentions"]:
         await edit_with_history(callback.message, t("mailing_mention", locale), reply_markup=mailing_mention_keyboard(locale))
@@ -966,11 +984,28 @@ async def mailing_new_cb(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "mailing:settings")
 async def mailing_settings_cb(callback: CallbackQuery, state: FSMContext) -> None:
-    locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
+    user = callback.from_user
+    locale = await resolve_locale(user.id, user.language_code)
+
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        settings = await get_setting(session, [
+            "mailing_template",
+            "mailing_timing_chats",
+            "mailing_timing_rounds",
+            "mailing_mentions_enabled",
+        ], user_id=user.id)
+
+    is_template = settings.get("mailing_template")
+    timing_chats = settings.get("mailing_timing_chats")
+    timing_rounds = settings.get("mailing_timing_rounds")
+    # Stored values are strings like "1" / "0"; interpret explicitly as boolean
+    is_mentions = settings.get("mailing_mentions_enabled") == "1"
+
     await state.clear()
     await edit_with_history(
         callback.message,
-        t("mailing_settings_text", locale),
+        t("mailing_settings_text", locale).format(is_template=t("enabled", locale) if is_template else t("disabled", locale), timing_chats=timing_chats + " сек" if timing_chats else t("disabled", locale), timing_rounds=timing_rounds + " сек" if timing_rounds else t("disabled", locale), is_mentions=t("enabled", locale) if is_mentions else t("disabled", locale)),
         reply_markup=mailing_settings_keyboard(locale),
     )
     await callback.answer()
@@ -1021,7 +1056,7 @@ async def mailing_default_account_cb(callback: CallbackQuery) -> None:
         await edit_with_history(callback.message, t("account_not_found", locale), reply_markup=back_to_menu_keyboard(locale))
         await callback.answer()
         return
-    intro = await build_mailing_intro(locale)
+    intro = await build_mailing_intro(locale, user_id=callback.from_user.id)
     await edit_with_history(
         callback.message,
         intro,
@@ -1062,7 +1097,7 @@ async def mailing_settings_message_input(message: Message, state: FSMContext) ->
     }
     session_factory = get_session_factory()
     async with session_factory() as session:
-        await set_setting(session, "mailing_template", json.dumps(payload, ensure_ascii=False))
+        await set_setting(session, "mailing_template", json.dumps(payload, ensure_ascii=False), user_id=message.from_user.id)
     await message.answer(t("mailing_settings_message_saved", locale))
     await state.clear()
 
@@ -1107,7 +1142,7 @@ async def mailing_settings_timing_chats_input(message: Message, state: FSMContex
         return
     session_factory = get_session_factory()
     async with session_factory() as session:
-        await set_setting(session, "mailing_timing_chats", str(value))
+        await set_setting(session, "mailing_timing_chats", str(value), user_id=message.from_user.id)
     await message.answer(t("mailing_settings_timing_saved", locale).format(value=value))
     await state.clear()
 
@@ -1125,7 +1160,7 @@ async def mailing_settings_timing_rounds_input(message: Message, state: FSMConte
         return
     session_factory = get_session_factory()
     async with session_factory() as session:
-        await set_setting(session, "mailing_timing_rounds", str(value))
+        await set_setting(session, "mailing_timing_rounds", str(value), user_id=message.from_user.id)
     await message.answer(t("mailing_settings_timing_saved", locale).format(value=value))
     await state.clear()
 
@@ -1146,7 +1181,7 @@ async def mailing_settings_mentions_on_cb(callback: CallbackQuery) -> None:
     locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
     session_factory = get_session_factory()
     async with session_factory() as session:
-        await set_setting(session, "mailing_mentions_enabled", "1")
+        await set_setting(session, "mailing_mentions_enabled", "1", user_id=callback.from_user.id)
     await callback.message.answer(t("mailing_settings_mentions_saved_on", locale))
     await callback.answer()
 
@@ -1156,7 +1191,7 @@ async def mailing_settings_mentions_off_cb(callback: CallbackQuery) -> None:
     locale = await resolve_locale(callback.from_user.id, callback.from_user.language_code)
     session_factory = get_session_factory()
     async with session_factory() as session:
-        await set_setting(session, "mailing_mentions_enabled", "0")
+        await set_setting(session, "mailing_mentions_enabled", "0", user_id=callback.from_user.id)
     await callback.message.answer(t("mailing_settings_mentions_saved_off", locale))
     await callback.answer()
 
@@ -1312,6 +1347,7 @@ async def mailing_details_cb(callback: CallbackQuery) -> None:
                 message_type=mailing.message_type.value,
                 mention=mention,
                 delay=mailing.delay_seconds,
+                repeat_count=mailing.repeat_count,
                 limit=mailing.limit_count,
                 total=stats["total"],
                 sent=stats["sent"],

@@ -55,6 +55,49 @@ alembic upgrade head
 python -m app.main
 ```
 
+## Deploy (server)
+
+This project runs:
+- the bot (aiogram long polling)
+- a small HTTP server for the web-auth page (`/auth/<token>`)
+
+To make the web-auth link work for users outside your server, you must change the bind host and (most importantly) the public base URL.
+
+1) Build the web-auth frontend (optional but recommended):
+
+```
+cd app/web_auth
+node -v
+npm ci
+npm run build
+```
+
+Note: `app/web_auth` uses Vite and requires Node.js 18+ (recommended: 20 LTS+). If you see `SyntaxError: Unexpected token {` from `node_modules/vite/...`, your server Node.js is too old — upgrade Node.js or build locally and copy `app/web_auth/dist` to the server.
+
+2) Set production env vars in `.env`:
+
+- `WEB_AUTH_BASE_URL` must be your public URL (no trailing slash), e.g. `https://example.com`
+- if you expose the port directly: `WEB_AUTH_HOST=0.0.0.0` and open `WEB_AUTH_PORT` in firewall
+- if you use Nginx/Caddy as HTTPS reverse proxy (recommended): keep `WEB_AUTH_HOST=127.0.0.1` and proxy to `WEB_AUTH_PORT`
+
+Example Nginx location:
+
+```
+location / {
+  proxy_pass http://127.0.0.1:8080;
+  proxy_set_header Host $host;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+3) Run migrations and start the app on the server:
+
+```
+alembic upgrade head
+python -m app.main
+```
+
 ## Add account session
 
 Use bot command `/account_add`.
